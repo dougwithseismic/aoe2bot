@@ -765,7 +765,8 @@ function cmdPlaceBuilding(msg)
     end
 
     -- 3. Use ConstructionPlacement to find valid position and build
-    --    Skip for TC Foundation — BuildStructure needs an existing TC to work
+    --    Skip for TC Foundation — both BuildStructure and FindBestPosition
+    --    can hang or silently fail when no TC exists
     local isTCFoundation = (typeId == UnitObjectType["TOWN_CENTER_FOUNDATION"])
     if helpersReady and construction and not isTCFoundation then
         local buildOk, buildResult = pcall(function()

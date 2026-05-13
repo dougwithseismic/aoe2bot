@@ -514,15 +514,10 @@ class FastCastleStrategy(BaseStrategy):
         """Scout is already running. Focus on vil production and first eco buildings.
 
         Eco buildings (mill, lumber camp) are handled by the eco manager's
-        DropoffNeeded logic -- we don't manually queue them here. The eco
-        manager only fires when idle vils exist AND resources have been
-        scouted, so we don't send vils to nonexistent resources.
+        DropoffNeeded logic -- we don't manually queue them here.
         """
-        # Nothing phase-specific beyond what on_tick already does:
-        # scouting, housing, training, idle vil assignment.
-        # Eco manager handles mill/lumber camp via DropoffNeeded when
-        # idle vils need a drop-off point.
-        pass
+        # Build farms if food is critically low (berries depleted early)
+        self._build_farms(w)
 
     # ================================================================
     # Phase 2: Dark Age Boom (10-20 vils)
