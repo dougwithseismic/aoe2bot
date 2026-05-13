@@ -60,9 +60,8 @@ end
 function Update()
     if helpersReady then
         pcall(function() resourceTracker:Update() end)
-        pcall(function() vilOccupation:Update() end)
+        -- NOT calling vilOccupation:Update() — it hijacks all vil assignments
         -- NOT calling construction:Update() or ProcessBuildingRequests()
-        -- vilOccupation:Update() needed so BuildStructureAtTown can find builders
     end
 
     if not pipe_connected then return end

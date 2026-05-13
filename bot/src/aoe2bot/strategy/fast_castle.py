@@ -35,7 +35,9 @@ class FastCastleStrategy(BaseStrategy):
         self._feudal_started = False
         self._castle_started = False
         self._houses_pending = 0
-        self._farm_positions: list[tuple[int, int]] = []
+        self._farm_cooldown = 0
+        self._mill_placed = False
+        self._lc_placed = False
 
     @property
     def name(self) -> str:
@@ -177,36 +179,50 @@ class FastCastleStrategy(BaseStrategy):
     def _do_eco_buildings(self, w: WorldState, raw: dict, acts: list[str]) -> None:
         tc = self._tc(w)
 
-        # Mill near berries — Feudal prereq + farm prereq
-        if not w.has_building("MILL", complete_only=False):
+        # Mill near TC — needed for farms + Feudal prereq
+        # Place close to TC so farms are efficient, not chasing distant berries
+        if not self._mill_placed and not w.has_building("MILL", complete_only=False):
             if w.can_afford(wood=100):
+                # Try near berries if they're close to TC, otherwise just near TC
                 berries = self._nearest(w, raw, "forage")
-                if berries:
+                if berries and tc.distance_to(Position(berries["x"], berries["y"])) < 12:
                     bx, by = berries["x"], berries["y"]
                     dx, dy = tc.x - bx, tc.y - by
                     d = max((dx*dx + dy*dy) ** 0.5, 0.1)
                     mx, my = bx + dx / d * 2, by + dy / d * 2
-                    if self._ok(self._place("MILL", mx, my)):
-                        acts.append("mill")
                 else:
-                    if self._ok(self._place("MILL", tc.x + 5, tc.y)):
-                        acts.append("mill")
+                    mx, my = tc.x + 5, tc.y
+                if self._ok(self._place("MILL", mx, my)):
+                    self._mill_placed = True
+                    acts.append("mill")
             return  # Don't build LC in same tick — stagger to save wood
 
-        # Lumber camp near trees (only after mill is placed/building)
-        if not w.has_building("LUMBER_CAMP", complete_only=False):
+        # Lumber camp — on the map-edge side of TC, near closest trees
+        if not self._lc_placed and not w.has_building("LUMBER_CAMP", complete_only=False):
             if w.can_afford(wood=100):
-                trees = self._nearest(w, raw, "trees")
-                if trees:
-                    tx, ty = trees["x"], trees["y"]
+                # Find trees close to TC (within 20 tiles)
+                scan = raw.get("_resources_scan", {})
+                all_trees = scan.get("trees", [])
+                near_trees = [t for t in all_trees if tc.distance_to(Position(t["x"], t["y"])) < 20]
+
+                if near_trees:
+                    # Pick the tree cluster on the safe side (edge of map)
+                    safe = w.spatial.layout.safe_side()
+                    best = max(near_trees, key=lambda t: (t["x"] - tc.x) * safe.x + (t["y"] - tc.y) * safe.y)
+                    tx, ty = best["x"], best["y"]
+                    # Place LC between tree and TC, 2 tiles from tree
                     dx, dy = tc.x - tx, tc.y - ty
                     d = max((dx*dx + dy*dy) ** 0.5, 0.1)
                     lx, ly = tx + dx / d * 2, ty + dy / d * 2
-                    if self._ok(self._place("LUMBER_CAMP", lx, ly)):
-                        acts.append("lc")
                 else:
-                    if self._ok(self._place("LUMBER_CAMP", tc.x - 5, tc.y)):
-                        acts.append("lc")
+                    # No nearby trees — place on safe side of TC
+                    safe = w.spatial.layout.safe_side()
+                    lx = tc.x + safe.x * 6
+                    ly = tc.y + safe.y * 6
+
+                if self._ok(self._place("LUMBER_CAMP", lx, ly)):
+                    self._lc_placed = True
+                    acts.append("lc")
 
         # Mining camp near gold — when Feudal or low gold
         if w.age >= 1 or w.gold < 50:
@@ -306,6 +322,10 @@ class FastCastleStrategy(BaseStrategy):
     def _do_farms(self, w: WorldState, raw: dict, acts: list[str]) -> None:
         if not w.has_building("MILL"):
             return
+        # Cooldown: don't spam farm builds — vils need time to walk and build
+        if self._farm_cooldown > 0:
+            self._farm_cooldown -= 1
+            return
 
         farm_count = w.building_count("FARM")
         needs_farm = (
@@ -317,14 +337,10 @@ class FastCastleStrategy(BaseStrategy):
         if not w.can_afford(wood=60):
             return
 
-        # Use smart_build which calls BuildStructureAtTown — handles farm snapping
-        resp = self.ctrl.smart_build("FARM", padding=0)
-        if self._ok(resp):
+        tc = self._tc(w)
+        if self._ok(self._place("FARM", tc.x + 3, tc.y)):
+            self._farm_cooldown = 15  # ~12 seconds before trying next farm
             acts.append("farm")
-        else:
-            # Fallback: try place_building near TC
-            tc = self._tc(w)
-            self._place("FARM", tc.x + 3, tc.y + 3)
 
     # ── Livestock ──
 
