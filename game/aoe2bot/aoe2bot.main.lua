@@ -765,8 +765,9 @@ function cmdPlaceBuilding(msg)
     end
 
     -- 3. Use ConstructionPlacement to find valid position and build
-    --    This handles full building footprint, not just one tile
-    if helpersReady and construction then
+    --    Skip for TC Foundation — BuildStructure needs an existing TC to work
+    local isTCFoundation = (typeId == UnitObjectType["TOWN_CENTER_FOUNDATION"])
+    if helpersReady and construction and not isTCFoundation then
         local buildOk, buildResult = pcall(function()
             return construction:BuildStructure(typeId, Vector3(x, y, 0), PlacementDirection.SOUTH_WEST, 1, true)
         end)
@@ -801,7 +802,8 @@ function cmdPlaceBuilding(msg)
     end
     table.sort(allVils, function(a, b) return a.dist < b.dist end)
     local builders = {}
-    for i = 1, math.min(4, #allVils) do
+    local maxBuilders = isTCFoundation and #allVils or math.min(4, #allVils)
+    for i = 1, maxBuilders do
         table.insert(builders, allVils[i].obj)
     end
 
