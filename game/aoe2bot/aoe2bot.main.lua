@@ -808,8 +808,9 @@ function cmdPlaceBuilding(msg)
     end
 
     -- 4b. Use FindBestPosition to get a valid spot for the full footprint
+    --      Skip for TC Foundation — FindBestPosition hangs without an existing TC
     local finalX, finalY, finalZ = x, y, 0
-    if helpersReady and construction then
+    if helpersReady and construction and not isTCFoundation then
         local findOk, bestPos = pcall(function()
             return construction:FindBestPosition(typeId, Vector3(x, y, 0), PlacementDirection.SOUTH_WEST, 1, true)
         end)
