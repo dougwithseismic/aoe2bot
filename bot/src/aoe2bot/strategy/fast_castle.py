@@ -144,31 +144,44 @@ class FastCastleStrategy(BaseStrategy):
                 return
 
         if self._scout_phase == 0:
-            # Manual perimeter scout — circle around base at radius 15
-            base = w.spatial.layout.base_center
-            waypoints = 8
-            if self._scout_waypoint >= waypoints:
+            # Manual scout toward fog of war — prioritize safe side (map edge)
+            if self._scout_waypoint >= 6:
                 self._scout_phase = 1
                 return
 
-            # Only send new waypoint every 5 ticks (~4s per waypoint)
             if self._tick % 5 != 1:
                 return
 
-            angle = (self._scout_waypoint / waypoints) * 2 * math.pi
-            tx = base.x + 15 * math.cos(angle)
-            ty = base.y + 15 * math.sin(angle)
+            base = w.spatial.layout.base_center
+            safe = w.spatial.layout.safe_side()
+
+            # Find unexplored direction from MapKnowledge
+            unexplored = w.map.get_unexplored_direction(base)
+
+            if unexplored is not None:
+                # Bias toward safe side
+                dx = unexplored.x + safe.x * 0.5
+                dy = unexplored.y + safe.y * 0.5
+                d = max((dx*dx + dy*dy) ** 0.5, 0.1)
+                radius = 12 + self._scout_waypoint * 4
+                tx = base.x + dx / d * radius
+                ty = base.y + dy / d * radius
+            else:
+                # Everything explored nearby — expand outward on safe side
+                radius = 15 + self._scout_waypoint * 5
+                tx = base.x + safe.x * radius
+                ty = base.y + safe.y * radius
+
             self.ctrl.move_units([self._scout_id], tx, ty)
             self._scout_waypoint += 1
-            acts.append(f"scout{self._scout_waypoint}")
+            acts.append(f"sc{self._scout_waypoint}")
 
         elif self._scout_phase == 1:
-            # Enable auto-scout
             msg: dict = {"action": "scout", "unit_id": self._scout_id}
             try:
                 if self.ctrl.client.request(msg).get("success"):
                     self._scout_phase = 2
-                    acts.append("auto_scout")
+                    acts.append("auto")
             except Exception:
                 pass
 
@@ -202,8 +215,9 @@ class FastCastleStrategy(BaseStrategy):
     # ── Split starting 6 vils: 3 food, 3 wood ──
 
     def _split_starting_vils(self, w: WorldState, raw: dict, acts: list[str]) -> None:
-        idle = w.idle_vils()
-        if len(idle) < 3:
+        # Grab ALL vils (not just idle) — VilOcc may have assigned them to wrong things
+        all_vils = [u for u in w.units.get_all() if u.is_villager]
+        if len(all_vils) < 3:
             return
 
         tc = self._tc(w)
@@ -218,30 +232,28 @@ class FastCastleStrategy(BaseStrategy):
         if not food_target and not self._wood_target:
             return  # Scout hasn't found anything yet
 
-        # Sort idle by distance to TC
-        idle.sort(key=lambda u: u.position.distance_to(tc))
+        # Sort all vils by distance to TC
+        all_vils.sort(key=lambda u: u.position.distance_to(tc))
 
-        # Send first 3 (or however many) to food
-        food_count = min(3, len(idle))
+        # Send first half to food, rest to wood
+        food_count = min(len(all_vils) // 2 + 1, len(all_vils))
         if food_target:
-            food_batch = idle[:food_count]
+            food_batch = all_vils[:food_count]
             self.ctrl.attack_target([u.id for u in food_batch], food_target["id"])
             for u in food_batch:
                 self._assigned_vils.add(u.id)
-            acts.append(f"{food_count}f")
-        else:
-            food_count = 0
+            acts.append(f"{food_count}f!")
 
-        # Send rest to wood
         if self._wood_target:
-            wood_batch = idle[food_count:]
+            wood_batch = all_vils[food_count:]
             if wood_batch:
                 self.ctrl.attack_target([u.id for u in wood_batch], self._wood_target["id"])
                 for u in wood_batch:
                     self._assigned_vils.add(u.id)
-                acts.append(f"{len(wood_batch)}w")
+                acts.append(f"{len(wood_batch)}w!")
 
         self._vils_split = True
+        logger.info("Split %d vils: %d food, %d wood", len(all_vils), food_count, len(all_vils) - food_count)
 
     def _find_food(self, w: WorldState, raw: dict) -> dict | None:
         tc = self._tc(w)
@@ -325,7 +337,8 @@ class FastCastleStrategy(BaseStrategy):
     # ── Assign new vils by build order ──
 
     def _assign_new_vils(self, w: WorldState, raw: dict, acts: list[str]) -> None:
-        idle = [u for u in w.idle_vils() if u.id not in self._assigned_vils]
+        # Check ALL idle vils every tick — reassign if resource depleted
+        idle = w.idle_vils()
         if not idle:
             return
 
@@ -375,8 +388,6 @@ class FastCastleStrategy(BaseStrategy):
                     assigned = True
                     acts.append(f"v{n}g")
 
-            if assigned:
-                self._assigned_vils.add(u.id)
             n -= 1
 
     # ── Farms ──
