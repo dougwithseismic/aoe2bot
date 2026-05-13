@@ -88,6 +88,27 @@ class WorldState:
         base = self.spatial.layout.base_center
         return self.map.get_exploration_pct(base, 20)
 
+    def nearest_idle_vils(self, pos: Position, count: int = 6) -> list[TrackedUnit]:
+        """Get the N closest idle villagers to a position."""
+        idle = self.units.get_idle_vils()
+        idle.sort(key=lambda u: u.position.distance_to(pos))
+        return idle[:count]
+
+    def nearest_resource_from_scan(
+        self, raw_state: dict, resource_type: str, near: Position | None = None,
+    ) -> dict | None:
+        """Find the closest resource object from scan data.
+
+        resource_type: "trees", "forage", "gold", "stone"
+        Returns dict with id, x, y or None.
+        """
+        origin = near or self.spatial.layout.base_center
+        scan = raw_state.get("_resources_scan", {})
+        objects = scan.get(resource_type, [])
+        if not objects:
+            return None
+        return min(objects, key=lambda o: origin.distance_to(Position(o["x"], o["y"])))
+
     # ── Private ──
 
     def _update_core(self, raw: dict) -> None:

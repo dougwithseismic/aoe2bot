@@ -96,8 +96,6 @@ class StrategyRunner:
                 break
 
             self.strategy.on_tick(raw_state, self.world)
-
-            self.world.queue.tick(self.world.game_time)
             self.tick_count += 1
 
             elapsed = time.monotonic() - tick_start
