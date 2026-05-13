@@ -1,26 +1,15 @@
-"""Fast Castle 27+2 Boom — proper build order.
+"""Fast Castle 27+2 Boom — proper build order with manual scouting.
 
-Based on the standard AoE2 Fast Castle build:
-  Vils 1-6:   sheep (food under TC)
-  Vil 7:      build lumber camp → wood
-  Vils 8-10:  wood
-  Vil 11:     lure boar (we skip boar — send to sheep/berries)
-  Vil 12:     build mill near berries → berries
-  Vils 13-16: berries
-  Vils 17-18: build farms
-  Vil 19:     build 2nd lumber camp → wood
-  Vils 20-23: wood
-  Vil 24:     build mining camp → gold
-  Vils 25-26: gold
-  Research loom → click Feudal (500 food)
-  Feudal: blacksmith + market → click Castle (800 food + 200 gold)
-  Castle: 2 extra TCs, mass farms, boom
-
-Each new vil gets a specific job. No reactive eco manager.
+Phase 0: Scout base perimeter (find trees, berries, gold)
+Phase 1: Build TC, split 6 vils (3 sheep, 3 wood)
+Phase 2: Follow build order — each new vil gets assigned job
+Phase 3: Feudal transition
+Phase 4: Castle boom
 """
 
 from __future__ import annotations
 
+import math
 import logging
 from typing import TYPE_CHECKING
 
@@ -37,35 +26,26 @@ logger = logging.getLogger(__name__)
 _AGE = {0: "Dark", 1: "Feudal", 2: "Castle", 3: "Imperial"}
 _TECH = "_tech_state"
 
-# Build order: vil number → assignment
-# "food" = sheep/berries, "wood" = trees, "gold" = gold, "farm" = build farm
-_BUILD_ORDER = {
-    1: "food", 2: "food", 3: "food", 4: "food", 5: "food", 6: "food",
-    7: "build_lc",  # build lumber camp then wood
-    8: "wood", 9: "wood", 10: "wood",
-    11: "food",  # would be boar lure — we send to sheep/berries
-    12: "build_mill",  # build mill near berries then berries
-    13: "food", 14: "food", 15: "food", 16: "food",
-    17: "farm", 18: "farm",
-    19: "wood", 20: "wood", 21: "wood", 22: "wood", 23: "wood",
-    24: "build_mc",  # build mining camp then gold
-    25: "gold", 26: "gold",
-}
-
 
 class FastCastleStrategy(BaseStrategy):
 
     def __init__(self, ctrl: GameController):
         super().__init__(ctrl)
         self._tick = 0
-        self._scouted = False
-        self._built: set[str] = set()
+        self._scout_phase = 0  # 0=perimeter, 1=auto, 2=done
+        self._scout_waypoint = 0
+        self._scout_id: int | None = None
         self._house_cd = 0
         self._farm_cd = 0
         self._feudal_clicked = False
         self._castle_clicked = False
-        self._last_vil_count = 0
         self._assigned_vils: set[int] = set()
+        self._vils_split = False
+
+        # LOCKED resource locations — once chosen, don't change
+        self._wood_target: dict | None = None  # {id, x, y} — the tree we send wood vils to
+        self._wood_lc_pos: Position | None = None  # where we built the lumber camp
+        self._built: set[str] = set()
 
     @property
     def name(self) -> str:
@@ -73,7 +53,7 @@ class FastCastleStrategy(BaseStrategy):
 
     def on_start(self) -> None:
         self.running = True
-        logger.info("Fast Castle 27+2 build order started")
+        logger.info("Fast Castle 27+2 started")
 
     def on_tick(self, raw_state: dict, world: WorldState | None = None) -> str | None:
         if world is None:
@@ -87,27 +67,34 @@ class FastCastleStrategy(BaseStrategy):
         w = world
         acts: list[str] = []
 
-        # Scout — manual first sweep then auto
-        self._scout(w)
+        # Always scout
+        self._do_scout(w, acts)
 
-        # Phase 0: build TC (Nomad)
+        # No TC → build one
         if not self._has_tc(w, raw_state):
             self._build_tc(w, acts)
             self._log(w, acts)
             return None
 
-        # Always: train vils + houses
+        # TC exists — run build order
         self._train(w, acts)
         self._houses(w, acts)
 
-        # Assign new vils based on build order
-        self._assign_by_build_order(w, raw_state, acts)
+        # Immediately split starting vils: 3 food, 3 wood
+        if not self._vils_split and w.tc_is_complete():
+            self._split_starting_vils(w, raw_state, acts)
 
-        # Farms (ongoing after mill)
+        # Build eco buildings when we can
+        self._eco_buildings(w, raw_state, acts)
+
+        # Assign new idle vils by build order number
+        self._assign_new_vils(w, raw_state, acts)
+
+        # Farms
         if "mill" in self._built:
             self._farms(w, acts)
 
-        # Age-specific goals
+        # Age goals
         if w.age == 0:
             self._dark(w, raw_state, acts)
         elif w.age == 1:
@@ -141,36 +128,49 @@ class FastCastleStrategy(BaseStrategy):
     def _scan(self, w: WorldState, raw: dict, key: str) -> dict | None:
         return w.nearest_resource_from_scan(raw, key, near=self._tc(w))
 
-    def _find_food_target(self, w: WorldState, raw: dict) -> dict | None:
-        """Find best food: sheep near TC > berries near TC."""
-        tc = self._tc(w)
-        livestock = raw.get("_livestock", {}).get("owned", [])
-        near_sheep = [o for o in livestock if tc.distance_to(Position(o["x"], o["y"])) < 15]
-        if near_sheep:
-            return min(near_sheep, key=lambda o: tc.distance_to(Position(o["x"], o["y"])))
-        berries = self._scan(w, raw, "forage")
-        if berries and tc.distance_to(Position(berries["x"], berries["y"])) < 15:
-            return berries
-        return None
+    # ── Scout: perimeter first, then auto ──
 
-    # ── Scout ──
+    def _do_scout(self, w: WorldState, acts: list[str]) -> None:
+        if self._scout_phase >= 2:
+            return
 
-    def _scout(self, w: WorldState) -> None:
-        if self._scouted:
-            return
-        sid = None
-        for u in w.units.get_all():
-            if u.is_scout:
-                sid = u.id
-                break
-        if not sid:
-            return
-        msg: dict = {"action": "scout", "unit_id": sid}
-        try:
-            if self.ctrl.client.request(msg).get("success"):
-                self._scouted = True
-        except Exception:
-            pass
+        # Find scout unit
+        if self._scout_id is None:
+            for u in w.units.get_all():
+                if u.is_scout:
+                    self._scout_id = u.id
+                    break
+            if self._scout_id is None:
+                return
+
+        if self._scout_phase == 0:
+            # Manual perimeter scout — circle around base at radius 15
+            base = w.spatial.layout.base_center
+            waypoints = 8
+            if self._scout_waypoint >= waypoints:
+                self._scout_phase = 1
+                return
+
+            # Only send new waypoint every 5 ticks (~4s per waypoint)
+            if self._tick % 5 != 1:
+                return
+
+            angle = (self._scout_waypoint / waypoints) * 2 * math.pi
+            tx = base.x + 15 * math.cos(angle)
+            ty = base.y + 15 * math.sin(angle)
+            self.ctrl.move_units([self._scout_id], tx, ty)
+            self._scout_waypoint += 1
+            acts.append(f"scout{self._scout_waypoint}")
+
+        elif self._scout_phase == 1:
+            # Enable auto-scout
+            msg: dict = {"action": "scout", "unit_id": self._scout_id}
+            try:
+                if self.ctrl.client.request(msg).get("success"):
+                    self._scout_phase = 2
+                    acts.append("auto_scout")
+            except Exception:
+                pass
 
     # ── TC ──
 
@@ -199,100 +199,185 @@ class FastCastleStrategy(BaseStrategy):
             self._house_cd = 8
             acts.append("h")
 
-    # ── Build order assignments ──
+    # ── Split starting 6 vils: 3 food, 3 wood ──
 
-    def _assign_by_build_order(self, w: WorldState, raw: dict, acts: list[str]) -> None:
+    def _split_starting_vils(self, w: WorldState, raw: dict, acts: list[str]) -> None:
+        idle = w.idle_vils()
+        if len(idle) < 3:
+            return
+
         tc = self._tc(w)
 
-        # Find newly idle vils that haven't been assigned yet
+        # Find food target (sheep near TC)
+        food_target = self._find_food(w, raw)
+
+        # Find and LOCK wood target (closest trees on safe side)
+        if self._wood_target is None:
+            self._pick_wood_location(w, raw)
+
+        if not food_target and not self._wood_target:
+            return  # Scout hasn't found anything yet
+
+        # Sort idle by distance to TC
+        idle.sort(key=lambda u: u.position.distance_to(tc))
+
+        # Send first 3 (or however many) to food
+        food_count = min(3, len(idle))
+        if food_target:
+            food_batch = idle[:food_count]
+            self.ctrl.attack_target([u.id for u in food_batch], food_target["id"])
+            for u in food_batch:
+                self._assigned_vils.add(u.id)
+            acts.append(f"{food_count}f")
+        else:
+            food_count = 0
+
+        # Send rest to wood
+        if self._wood_target:
+            wood_batch = idle[food_count:]
+            if wood_batch:
+                self.ctrl.attack_target([u.id for u in wood_batch], self._wood_target["id"])
+                for u in wood_batch:
+                    self._assigned_vils.add(u.id)
+                acts.append(f"{len(wood_batch)}w")
+
+        self._vils_split = True
+
+    def _find_food(self, w: WorldState, raw: dict) -> dict | None:
+        tc = self._tc(w)
+        livestock = raw.get("_livestock", {}).get("owned", [])
+        near = [o for o in livestock if tc.distance_to(Position(o["x"], o["y"])) < 15]
+        if near:
+            return min(near, key=lambda o: tc.distance_to(Position(o["x"], o["y"])))
+        berries = self._scan(w, raw, "forage")
+        if berries and tc.distance_to(Position(berries["x"], berries["y"])) < 15:
+            return berries
+        return None
+
+    def _pick_wood_location(self, w: WorldState, raw: dict) -> None:
+        """Pick the best tree cluster and LOCK it. Never change after this."""
+        tc = self._tc(w)
+        scan = raw.get("_resources_scan", {})
+        trees = scan.get("trees", [])
+
+        # Filter to trees within 20 tiles of TC
+        near = [t for t in trees if tc.distance_to(Position(t["x"], t["y"])) < 20]
+        if not near:
+            return
+
+        # Prefer trees on the safe side (toward map edge)
+        safe = w.spatial.layout.safe_side()
+        best = max(near, key=lambda t: (t["x"] - tc.x) * safe.x + (t["y"] - tc.y) * safe.y)
+
+        self._wood_target = best
+        logger.info("LOCKED wood location: %.0f, %.0f", best["x"], best["y"])
+
+    # ── Eco buildings ──
+
+    def _eco_buildings(self, w: WorldState, raw: dict, acts: list[str]) -> None:
+        tc = self._tc(w)
+
+        # Lumber camp at locked wood location
+        if "lc" not in self._built and self._wood_target and w.can_afford(wood=100):
+            if not w.has_building("LUMBER_CAMP", complete_only=False):
+                tx, ty = self._wood_target["x"], self._wood_target["y"]
+                dx, dy = tc.x - tx, tc.y - ty
+                d = max((dx*dx + dy*dy) ** 0.5, 0.1)
+                lx, ly = tx + dx / d * 4, ty + dy / d * 4
+                if self._ok(self._place("LUMBER_CAMP", lx, ly)):
+                    self._built.add("lc")
+                    self._wood_lc_pos = Position(lx, ly)
+                    acts.append("lc")
+            else:
+                self._built.add("lc")
+
+        # Mill — after LC is down and we have 8+ vils
+        if "mill" not in self._built and "lc" in self._built and w.villager_count >= 8:
+            if not w.has_building("MILL", complete_only=False) and w.can_afford(wood=100):
+                berries = self._scan(w, raw, "forage")
+                if berries and tc.distance_to(Position(berries["x"], berries["y"])) < 12:
+                    bx, by = berries["x"], berries["y"]
+                    dx, dy = tc.x - bx, tc.y - by
+                    d = max((dx*dx + dy*dy) ** 0.5, 0.1)
+                    mx, my = bx + dx / d * 2, by + dy / d * 2
+                else:
+                    mx, my = tc.x + 5, tc.y
+                if self._ok(self._place("MILL", mx, my)):
+                    self._built.add("mill")
+                    acts.append("mill")
+            else:
+                self._built.add("mill")
+
+        # Mining camp — when we need gold (Feudal prep or low gold)
+        if "mc" not in self._built and w.villager_count >= 22:
+            if not w.has_building("MINING_CAMP", complete_only=False) and w.can_afford(wood=100):
+                gold = self._scan(w, raw, "gold")
+                if gold:
+                    gx, gy = gold["x"], gold["y"]
+                    dx, dy = tc.x - gx, tc.y - gy
+                    d = max((dx*dx + dy*dy) ** 0.5, 0.1)
+                    if self._ok(self._place("MINING_CAMP", gx + dx / d * 3, gy + dy / d * 3)):
+                        self._built.add("mc")
+                        acts.append("mc")
+            else:
+                self._built.add("mc")
+
+    # ── Assign new vils by build order ──
+
+    def _assign_new_vils(self, w: WorldState, raw: dict, acts: list[str]) -> None:
         idle = [u for u in w.idle_vils() if u.id not in self._assigned_vils]
         if not idle:
             return
 
-        vil_num = w.villager_count  # Current vil number in build order
+        n = w.villager_count
 
         for u in idle:
-            # What should this vil do based on build order?
-            assignment = _BUILD_ORDER.get(vil_num, "food" if w.food < w.wood else "wood")
+            # Build order: what should this vil number do?
+            if n <= 6:
+                job = "food"
+            elif n == 7:
+                job = "wood"  # LC builder
+            elif n <= 10:
+                job = "wood"
+            elif n == 11:
+                job = "food"  # Boar lurer (we just send to food)
+            elif n == 12:
+                job = "food"  # Mill builder → berries
+            elif n <= 16:
+                job = "food"
+            elif n <= 18:
+                job = "food"  # Farm builders (farms handle food)
+            elif n <= 23:
+                job = "wood"
+            elif n == 24:
+                job = "gold"  # MC builder
+            elif n <= 26:
+                job = "gold"
+            else:
+                job = "food" if w.food < w.wood else "wood"
 
-            if assignment == "food":
-                target = self._find_food_target(w, raw)
+            assigned = False
+            if job == "food":
+                target = self._find_food(w, raw)
                 if target:
                     self.ctrl.attack_target([u.id], target["id"])
-                    self._assigned_vils.add(u.id)
-                    acts.append(f"v{vil_num}f")
-
-            elif assignment == "wood":
-                trees = self._scan(w, raw, "trees")
-                if trees:
-                    self.ctrl.attack_target([u.id], trees["id"])
-                    self._assigned_vils.add(u.id)
-                    acts.append(f"v{vil_num}w")
-
-            elif assignment == "gold":
+                    assigned = True
+                    acts.append(f"v{n}f")
+            elif job == "wood":
+                if self._wood_target:
+                    self.ctrl.attack_target([u.id], self._wood_target["id"])
+                    assigned = True
+                    acts.append(f"v{n}w")
+            elif job == "gold":
                 gold = self._scan(w, raw, "gold")
                 if gold:
                     self.ctrl.attack_target([u.id], gold["id"])
-                    self._assigned_vils.add(u.id)
-                    acts.append(f"v{vil_num}g")
+                    assigned = True
+                    acts.append(f"v{n}g")
 
-            elif assignment == "farm":
-                if self._farm_cd <= 0 and w.can_afford(wood=60):
-                    if self._ok(self._place("FARM", tc.x + 3, tc.y)):
-                        self._farm_cd = 15
-                        self._assigned_vils.add(u.id)
-                        acts.append(f"v{vil_num}fm")
-
-            elif assignment == "build_lc":
-                if "lc" not in self._built and w.can_afford(wood=100):
-                    scan = raw.get("_resources_scan", {})
-                    trees_list = scan.get("trees", [])
-                    near = [t for t in trees_list if tc.distance_to(Position(t["x"], t["y"])) < 20]
-                    if near:
-                        safe = w.spatial.layout.safe_side()
-                        best = max(near, key=lambda t: (t["x"] - tc.x) * safe.x + (t["y"] - tc.y) * safe.y)
-                        tx, ty = best["x"], best["y"]
-                        dx, dy = tc.x - tx, tc.y - ty
-                        d = max((dx*dx + dy*dy) ** 0.5, 0.1)
-                        lx, ly = tx + dx / d * 4, ty + dy / d * 4
-                        if self._ok(self._place("LUMBER_CAMP", lx, ly)):
-                            self._built.add("lc")
-                            # Send this vil to wood
-                            self.ctrl.attack_target([u.id], best["id"])
-                            self._assigned_vils.add(u.id)
-                            acts.append(f"v{vil_num}lc")
-
-            elif assignment == "build_mill":
-                if "mill" not in self._built and w.can_afford(wood=100):
-                    berries = self._scan(w, raw, "forage")
-                    if berries and tc.distance_to(Position(berries["x"], berries["y"])) < 12:
-                        bx, by = berries["x"], berries["y"]
-                        dx, dy = tc.x - bx, tc.y - by
-                        d = max((dx*dx + dy*dy) ** 0.5, 0.1)
-                        mx, my = bx + dx / d * 2, by + dy / d * 2
-                    else:
-                        mx, my = tc.x + 5, tc.y
-                    if self._ok(self._place("MILL", mx, my)):
-                        self._built.add("mill")
-                        if berries:
-                            self.ctrl.attack_target([u.id], berries["id"])
-                        self._assigned_vils.add(u.id)
-                        acts.append(f"v{vil_num}mill")
-
-            elif assignment == "build_mc":
-                if "mc" not in self._built and w.can_afford(wood=100):
-                    gold = self._scan(w, raw, "gold")
-                    if gold:
-                        gx, gy = gold["x"], gold["y"]
-                        dx, dy = tc.x - gx, tc.y - gy
-                        d = max((dx*dx + dy*dy) ** 0.5, 0.1)
-                        if self._ok(self._place("MINING_CAMP", gx + dx / d * 3, gy + dy / d * 3)):
-                            self._built.add("mc")
-                            self.ctrl.attack_target([u.id], gold["id"])
-                            self._assigned_vils.add(u.id)
-                            acts.append(f"v{vil_num}mc")
-
-            vil_num -= 1  # Assign earlier build order slots to remaining idle
+            if assigned:
+                self._assigned_vils.add(u.id)
+            n -= 1
 
     # ── Farms ──
 
@@ -312,8 +397,8 @@ class FastCastleStrategy(BaseStrategy):
             if self._ok(self.ctrl.research_loom()):
                 acts.append("loom")
 
-        dark_count = sum(1 for b in ["MILL", "LUMBER_CAMP", "MINING_CAMP", "BARRACKS"] if w.has_building(b))
-        if not self._feudal_clicked and dark_count >= 2 and w.can_afford(food=500):
+        dark = sum(1 for b in ["MILL", "LUMBER_CAMP", "MINING_CAMP", "BARRACKS"] if w.has_building(b))
+        if not self._feudal_clicked and dark >= 2 and w.can_afford(food=500):
             if self._ok(self.ctrl.advance_to_feudal()):
                 self._feudal_clicked = True
                 acts.append("feudal")
@@ -339,7 +424,6 @@ class FastCastleStrategy(BaseStrategy):
             if self._ok(self.ctrl.advance_to_castle()):
                 self._castle_clicked = True
                 acts.append("castle")
-
         self._farms(w, acts)
 
     # ── Castle ──
@@ -350,23 +434,18 @@ class FastCastleStrategy(BaseStrategy):
             pos = w.spatial.find_placement("TOWN_CENTER", goal=PlacementGoal.NEAR_TC)
             if pos and self._ok(self._place("TOWN_CENTER", pos.x, pos.y)):
                 acts.append("tc2")
-
         if not w.has_building("BARRACKS", complete_only=False) and w.can_afford(wood=175):
             if self._ok(self._place("BARRACKS", tc.x + 10, tc.y - 4)):
                 acts.append("rax")
-
         if not w.has_building("STABLE", complete_only=False) and w.has_building("BARRACKS") and w.can_afford(wood=175):
             if self._ok(self._place("STABLE", tc.x - 10, tc.y - 4)):
                 acts.append("stb")
-
         if w.has_building("STABLE") and w.villager_count >= 25 and w.can_afford(food=120, gold=75):
             if self._ok(self.ctrl.train_knight()):
                 acts.append("knt")
-
         tech = raw.get(_TECH, {})
         if not tech.get(str(Technology.WHEELBARROW), {}).get("researched"):
             self.ctrl.research(Technology.WHEELBARROW)
-
         self._farms(w, acts)
 
     # ── Log ──
