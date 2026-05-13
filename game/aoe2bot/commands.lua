@@ -153,25 +153,35 @@ function commands.cmdPlaceBuilding(msg)
         -- BuildStructure failed — fall through to manual method
     end
 
-    -- 4. Manual fallback: find vils and use UnitsBuildStructure
-    local p = GetAssignedPlayer()
-    local allVils = {}
-    for _, v in ipairs(p:GetObjectsByClass(UnitClass.VILLAGER)) do
-        if v:IsAlive() and v:GetOwningPlayer():GetId() == p:GetId() then
-            local pos = v:GetPosition()
-            local dx = pos.x - x
-            local dy = pos.y - y
-            table.insert(allVils, { obj = v, dist = math.sqrt(dx*dx + dy*dy) })
+    -- 4. Find builders — use specific builder_ids if provided, else closest vils
+    local builders = {}
+    if msg.builder_ids then
+        for _, bid in ipairs(msg.builder_ids) do
+            local obj = GetObjectById(bid)
+            if obj and obj:IsAlive() then table.insert(builders, obj) end
+        end
+    else
+        local p = GetAssignedPlayer()
+        local allVils = {}
+        for _, v in ipairs(p:GetObjectsByClass(UnitClass.VILLAGER)) do
+            if v:IsAlive() and v:GetOwningPlayer():GetId() == p:GetId() then
+                local pos = v:GetPosition()
+                local dx = pos.x - x
+                local dy = pos.y - y
+                table.insert(allVils, { obj = v, dist = math.sqrt(dx*dx + dy*dy) })
+            end
+        end
+        if #allVils == 0 then
+            return { action = "error", error = "no villagers", step = 4 }
+        end
+        table.sort(allVils, function(a, b) return a.dist < b.dist end)
+        local maxBuilders = isTCFoundation and #allVils or math.min(4, #allVils)
+        for i = 1, maxBuilders do
+            table.insert(builders, allVils[i].obj)
         end
     end
-    if #allVils == 0 then
-        return { action = "error", error = "no villagers", step = 4 }
-    end
-    table.sort(allVils, function(a, b) return a.dist < b.dist end)
-    local builders = {}
-    local maxBuilders = isTCFoundation and #allVils or math.min(4, #allVils)
-    for i = 1, maxBuilders do
-        table.insert(builders, allVils[i].obj)
+    if #builders == 0 then
+        return { action = "error", error = "no builders", step = 4 }
     end
 
     -- 4b. Find a clear spot for the building footprint

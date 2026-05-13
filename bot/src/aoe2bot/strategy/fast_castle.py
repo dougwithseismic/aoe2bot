@@ -112,8 +112,11 @@ class FastCastleStrategy(BaseStrategy):
     def _has_tc(self, w: WorldState, raw: dict) -> bool:
         return w.has_building("TOWN_CENTER", complete_only=False) or bool(raw.get("_tcs"))
 
-    def _place(self, name: str, x: float, y: float) -> dict:
-        resp = self.ctrl.place_building(name, x, y)
+    def _place(self, name: str, x: float, y: float, builder_ids: list[int] | None = None) -> dict:
+        msg: dict = {"action": "place_building", "building_name": name, "x": x, "y": y}
+        if builder_ids:
+            msg["builder_ids"] = builder_ids
+        resp = self.ctrl.client.request(msg)
         if resp.get("action") == "error":
             logger.debug("Build %s: %s", name, resp.get("error", "")[:50])
         return resp
@@ -310,7 +313,11 @@ class FastCastleStrategy(BaseStrategy):
                 dx, dy = tc.x - tx, tc.y - ty
                 d = max((dx*dx + dy*dy) ** 0.5, 0.1)
                 lx, ly = tx + dx / d * 4, ty + dy / d * 4
-                if self._ok(self._place("LUMBER_CAMP", lx, ly)):
+                # Find the wood vil closest to trees — use ONLY that one to build
+                wood_vils = [u for u in w.units.get_all() if u.is_villager and not u.is_idle]
+                near_trees = [u for u in wood_vils if u.position.distance_to(Position(tx, ty)) < 15]
+                builder = [near_trees[0].id] if near_trees else None
+                if self._ok(self._place("LUMBER_CAMP", lx, ly, builder_ids=builder)):
                     self._built.add("lc")
                     acts.append("lc")
 
