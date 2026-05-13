@@ -511,12 +511,29 @@ class FastCastleStrategy(BaseStrategy):
     # ================================================================
 
     def _phase_1_early_dark(self, w: WorldState, raw_state: dict) -> None:
-        """Scout is already running. Focus on vil production and first eco buildings.
+        """Build mill and lumber camp explicitly — don't rely on eco manager."""
+        # Mill — needed for farms, build ASAP
+        if (
+            not w.has_building("MILL", complete_only=False)
+            and w.can_afford(wood=100)
+            and w.commands.can_issue("BUILD", "MILL")
+            and not w.queue.has_active("build_mill")
+        ):
+            w.queue.add_action(self._make_build_action(
+                "build_mill", "MILL", w, Priority.HIGH,
+            ))
 
-        Eco buildings (mill, lumber camp) are handled by the eco manager's
-        DropoffNeeded logic -- we don't manually queue them here.
-        """
-        # Build farms if food is critically low (berries depleted early)
+        # Lumber camp near trees
+        if (
+            not w.has_building("LUMBER_CAMP", complete_only=False)
+            and w.can_afford(wood=100)
+            and w.commands.can_issue("BUILD", "LUMBER_CAMP")
+            and not w.queue.has_active("build_lc")
+        ):
+            w.queue.add_action(self._make_build_action(
+                "build_lc", "LUMBER_CAMP", w, Priority.HIGH,
+            ))
+
         self._build_farms(w)
 
     # ================================================================
@@ -541,7 +558,28 @@ class FastCastleStrategy(BaseStrategy):
                 "research_loom", w, Priority.NORMAL, lambda: self.ctrl.research_loom(),
             ))
 
-        # Farms when food is low and berries are depleted
+        # Ensure mill + lumber camp exist (in case Phase 1 didn't build them)
+        if (
+            not w.has_building("MILL", complete_only=False)
+            and w.can_afford(wood=100)
+            and w.commands.can_issue("BUILD", "MILL")
+            and not w.queue.has_active("build_mill")
+        ):
+            w.queue.add_action(self._make_build_action(
+                "build_mill", "MILL", w, Priority.HIGH,
+            ))
+
+        if (
+            not w.has_building("LUMBER_CAMP", complete_only=False)
+            and w.can_afford(wood=100)
+            and w.commands.can_issue("BUILD", "LUMBER_CAMP")
+            and not w.queue.has_active("build_lc")
+        ):
+            w.queue.add_action(self._make_build_action(
+                "build_lc", "LUMBER_CAMP", w, Priority.HIGH,
+            ))
+
+        # Farms when food is low
         self._build_farms(w)
 
         # Advance to Feudal

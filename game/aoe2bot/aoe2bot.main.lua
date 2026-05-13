@@ -831,6 +831,18 @@ function cmdPlaceBuilding(msg)
                     if not tile or not tile:IsBuildable() then
                         return false
                     end
+                    -- Check for static objects (trees, berries, stone) blocking the tile
+                    -- Skip mobile units (vils, scouts, livestock) — they move out of the way
+                    local objs = tile:GetObjects()
+                    if objs then
+                        for _, obj in ipairs(objs) do
+                            local cls = obj:GetClass()
+                            -- 904=villager, 961=scout, 958=livestock — these move
+                            if cls ~= 904 and cls ~= 961 and cls ~= 958 then
+                                return false
+                            end
+                        end
+                    end
                 end
             end
             return true
