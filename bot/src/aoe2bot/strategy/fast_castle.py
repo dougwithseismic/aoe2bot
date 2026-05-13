@@ -39,8 +39,7 @@ class FastCastleStrategy(BaseStrategy):
         self._farm_cd = 0
         self._feudal_clicked = False
         self._castle_clicked = False
-        self._assigned_vils: set[int] = set()
-        self._vils_split = False
+        self._tc_food_forced = False
 
         # LOCKED resource locations — once chosen, don't change
         self._wood_target: dict | None = None  # {id, x, y} — the tree we send wood vils to
@@ -70,11 +69,25 @@ class FastCastleStrategy(BaseStrategy):
         # Always scout
         self._do_scout(w, acts)
 
-        # No TC → build one
+        # No TC → build one + move cows to build site
         if not self._has_tc(w, raw_state):
             self._build_tc(w, acts)
+            bc = w.spatial.layout.base_center
+            livestock = raw_state.get("_livestock", {}).get("owned", [])
+            if livestock:
+                self.ctrl.move_units([o["id"] for o in livestock], bc.x, bc.y)
             self._log(w, acts)
             return None
+
+        # TC just completed → FORCE all 6 starting vils to sheep
+        if not self._tc_food_forced and w.tc_is_complete():
+            food = self._find_food(w, raw_state)
+            if food:
+                all_vils = [u for u in w.units.get_all() if u.is_villager]
+                if all_vils:
+                    self.ctrl.attack_target([u.id for u in all_vils], food["id"])
+                    acts.append(f"{len(all_vils)}f!")
+                    self._tc_food_forced = True
 
         # TC exists — run build order
         self._train(w, acts)
