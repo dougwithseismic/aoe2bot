@@ -238,8 +238,9 @@ class FastCastleStrategy(BaseStrategy):
         # Sort all vils by distance to TC
         all_vils.sort(key=lambda u: u.position.distance_to(tc))
 
-        # Send first half to food, rest to wood
-        food_count = min(len(all_vils) // 2 + 1, len(all_vils))
+        # Standard FC: 6 on food first, then wood. Starting split = all 6 to food
+        # (vil 7 is first wood vil — comes from training, not the starting 6)
+        food_count = len(all_vils)  # ALL starting vils to food
         if food_target:
             food_batch = all_vils[:food_count]
             self.ctrl.attack_target([u.id for u in food_batch], food_target["id"])
@@ -306,8 +307,8 @@ class FastCastleStrategy(BaseStrategy):
             else:
                 self._built.add("lc")
 
-        # Mill — after LC is down and we have 8+ vils
-        if "mill" not in self._built and "lc" in self._built and w.villager_count >= 8:
+        # Mill — at vil 12 (after LC, need berries)
+        if "mill" not in self._built and "lc" in self._built and w.villager_count >= 12:
             if not w.has_building("MILL", complete_only=False) and w.can_afford(wood=100):
                 berries = self._scan(w, raw, "forage")
                 if berries and tc.distance_to(Position(berries["x"], berries["y"])) < 12:
@@ -348,27 +349,28 @@ class FastCastleStrategy(BaseStrategy):
         n = w.villager_count
 
         for u in idle:
-            # Build order: what should this vil number do?
+            # 27+2 Fast Castle build order:
+            #  1-6:  food (sheep)         — starting vils, handled by _split
+            #  7:    wood (build LC)      — first wood vil
+            #  8-10: wood                 — 4 on wood total
+            #  11:   food (lure boar)     — we send to sheep/berries
+            #  12:   food (build mill)    — then berries
+            #  13-16: food (berries)      — ~11 on food total
+            #  17-18: food (farms)        — transition to farms
+            #  19:   wood (2nd LC)        — 5 more on wood
+            #  20-23: wood                — 9 on wood total
+            #  24:   gold (build MC)      — gold for Castle
+            #  25-26: gold                — 3 on gold total
             if n <= 6:
                 job = "food"
-            elif n == 7:
-                job = "wood"  # LC builder
             elif n <= 10:
-                job = "wood"
-            elif n == 11:
-                job = "food"  # Boar lurer (we just send to food)
-            elif n == 12:
-                job = "food"  # Mill builder → berries
-            elif n <= 16:
-                job = "food"
+                job = "wood"    # vils 7-10: wood (4 total)
             elif n <= 18:
-                job = "food"  # Farm builders (farms handle food)
+                job = "food"    # vils 11-18: food (sheep/berries/farms)
             elif n <= 23:
-                job = "wood"
-            elif n == 24:
-                job = "gold"  # MC builder
+                job = "wood"    # vils 19-23: wood (9 total)
             elif n <= 26:
-                job = "gold"
+                job = "gold"    # vils 24-26: gold (3 total)
             else:
                 job = "food" if w.food < w.wood else "wood"
 
@@ -420,7 +422,7 @@ class FastCastleStrategy(BaseStrategy):
 
     def _dark(self, w: WorldState, raw: dict, acts: list[str]) -> None:
         tech = raw.get(_TECH, {})
-        if not tech.get(str(Technology.LOOM), {}).get("researched") and w.villager_count >= 20 and w.can_afford(food=50):
+        if not tech.get(str(Technology.LOOM), {}).get("researched") and w.villager_count >= 24 and w.can_afford(food=50):
             if self._ok(self.ctrl.research_loom()):
                 acts.append("loom")
 
