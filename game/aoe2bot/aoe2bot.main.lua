@@ -808,10 +808,11 @@ function cmdPlaceBuilding(msg)
         table.insert(builders, allVils[i].obj)
     end
 
-    -- 4b. Use FindBestPosition to get a valid spot for the full footprint
-    --      Skip for TC Foundation — FindBestPosition hangs without an existing TC
+    -- 4b. Find a valid position for the full building footprint
     local finalX, finalY, finalZ = x, y, 0
-    if helpersReady and construction and not isTCFoundation then
+
+    if not isTCFoundation and helpersReady and construction then
+        -- Non-TC: use FindBestPosition (works when TC exists)
         local findOk, bestPos = pcall(function()
             return construction:FindBestPosition(typeId, Vector3(x, y, 0), PlacementDirection.SOUTH_WEST, 1, true)
         end)
@@ -819,6 +820,44 @@ function cmdPlaceBuilding(msg)
             finalX = bestPos.x
             finalY = bestPos.y
             finalZ = bestPos.z or 0
+        end
+    else
+        -- TC Foundation: scan candidate positions, check full 4x4 footprint
+        local function isFootprintClear(cx, cy, size)
+            local half = math.floor(size / 2)
+            for dx = -half, half do
+                for dy = -half, half do
+                    local tile = GetMapTile(math.floor(cx) + dx, math.floor(cy) + dy)
+                    if not tile or not tile:IsBuildable() then
+                        return false
+                    end
+                end
+            end
+            return true
+        end
+
+        local offsets = {
+            {0, 0}, {3, 0}, {-3, 0}, {0, 3}, {0, -3},
+            {3, 3}, {-3, 3}, {3, -3}, {-3, -3},
+            {6, 0}, {-6, 0}, {0, 6}, {0, -6},
+            {6, 3}, {-6, 3}, {6, -3}, {-6, -3},
+            {3, 6}, {-3, 6}, {3, -6}, {-3, -6},
+        }
+        local found = false
+        for _, off in ipairs(offsets) do
+            local cx = x + off[1]
+            local cy = y + off[2]
+            if isFootprintClear(cx, cy, 4) then
+                finalX = cx
+                finalY = cy
+                local tile = GetMapTile(math.floor(cx), math.floor(cy))
+                if tile then finalZ = tile:GetElevation() end
+                found = true
+                break
+            end
+        end
+        if not found then
+            return { action = "error", error = "no clear 4x4 spot near " .. x .. "," .. y, step = 4 }
         end
     end
 
@@ -828,9 +867,10 @@ function cmdPlaceBuilding(msg)
         action = "place_building_result",
         success = ok,
         building = resolved,
-        x = x, y = y, z = z,
-        buildable = buildable,
+        x = finalX, y = finalY, z = finalZ,
+        buildable = true,
         builderCount = #builders,
+        method = isTCFoundation and "footprint_scan" or "find_best_position",
         step = 5,
     }
 end
