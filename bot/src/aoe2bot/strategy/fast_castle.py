@@ -39,6 +39,8 @@ class FastCastleStrategy(BaseStrategy):
         self._vils_assigned_food = 0
         self._vils_assigned_wood = 0
         self._gather_point_set = False
+        self._feudal_researching = False
+        self._castle_researching = False
 
     @property
     def name(self) -> str:
@@ -78,7 +80,7 @@ class FastCastleStrategy(BaseStrategy):
         self._do_mill(w, actions)
 
         # ── Lumber camp ──
-        self._do_lumber_camp(w, actions)
+        self._do_lumber_camp(w, raw_state, actions)
 
         # ── Idle vils → assign to work ──
         self._do_assign_idle(w, raw_state, actions)
@@ -210,7 +212,12 @@ class FastCastleStrategy(BaseStrategy):
             target = w.nearest_resource_from_scan(raw_state, "trees", near=tc)
             resource = "wood"
         else:
-            target = w.nearest_resource_from_scan(raw_state, "forage", near=tc)
+            # Prefer livestock (sheep) over forage (berries)
+            livestock = raw_state.get("_livestock", {}).get("owned", [])
+            if livestock:
+                target = min(livestock, key=lambda o: tc.distance_to(Position(o["x"], o["y"])))
+            else:
+                target = w.nearest_resource_from_scan(raw_state, "forage", near=tc)
             resource = "food"
 
         if target is None:
@@ -240,11 +247,13 @@ class FastCastleStrategy(BaseStrategy):
     # ================================================================
 
     def _do_houses(self, w: WorldState, actions: list[str]) -> None:
-        if w.housing_headroom > 3:
+        if w.housing_headroom > 4:
             return
-        if not w.can_afford(wood=25):
+        # Keep wood buffer for other buildings — don't spend last 100 wood on houses
+        if not w.can_afford(wood=125):
             return
-        resp = self._smart_build("HOUSE")
+        tc = w.spatial.layout.tc_pos or w.spatial.layout.base_center
+        resp = self._place("HOUSE", tc.x - 4, tc.y + 4)
         if resp.get("action") != "error":
             actions.append("house")
 
@@ -258,7 +267,8 @@ class FastCastleStrategy(BaseStrategy):
             return
         if not w.can_afford(wood=100):
             return
-        resp = self._smart_build("MILL")
+        tc = w.spatial.layout.tc_pos or w.spatial.layout.base_center
+        resp = self._place("MILL", tc.x + 5, tc.y)
         if resp.get("action") != "error":
             self._mill_built = True
             actions.append("mill")
@@ -267,13 +277,29 @@ class FastCastleStrategy(BaseStrategy):
     # Lumber camp
     # ================================================================
 
-    def _do_lumber_camp(self, w: WorldState, actions: list[str]) -> None:
+    def _do_lumber_camp(self, w: WorldState, raw_state: dict, actions: list[str]) -> None:
         if self._lc_built or w.has_building("LUMBER_CAMP", complete_only=False):
             self._lc_built = True
             return
         if not w.can_afford(wood=100):
             return
-        resp = self._smart_build("LUMBER_CAMP")
+        tc = w.spatial.layout.tc_pos or w.spatial.layout.base_center
+        # Place near closest trees to TC
+        trees = w.nearest_resource_from_scan(raw_state, "trees", near=tc)
+        if trees:
+            # Place between TC and trees, closer to trees
+            tx, ty = trees["x"], trees["y"]
+            dx, dy = tx - tc.x, ty - tc.y
+            dist = (dx**2 + dy**2) ** 0.5
+            if dist > 2:
+                nx, ny = dx / dist, dy / dist
+                lx = tc.x + nx * (dist - 2)
+                ly = tc.y + ny * (dist - 2)
+            else:
+                lx, ly = tx, ty
+            resp = self._place("LUMBER_CAMP", lx, ly)
+        else:
+            resp = self._place("LUMBER_CAMP", tc.x - 5, tc.y)
         if resp.get("action") != "error":
             self._lc_built = True
             actions.append("lumber_camp")
@@ -291,10 +317,15 @@ class FastCastleStrategy(BaseStrategy):
         dist = self.eco.get_desired_distribution_world(w)
 
         # Assign idle vils based on desired distribution
-        # Pick the resource with the biggest deficit
+        # For food: prefer livestock (sheep/goats) first, then forage (berries)
         resource_order: list[tuple[str, str]] = []
         if dist.get("food", 0) > 0:
-            resource_order.append(("food", "forage"))
+            # Check livestock first — sheep under TC should be eaten before berries
+            livestock = raw_state.get("_livestock", {}).get("owned", [])
+            if livestock:
+                resource_order.append(("food", "_livestock"))
+            else:
+                resource_order.append(("food", "forage"))
         if dist.get("wood", 0) > 0:
             resource_order.append(("wood", "trees"))
         if dist.get("gold", 0) > 0:
@@ -315,7 +346,17 @@ class FastCastleStrategy(BaseStrategy):
         for res, scan_key in resource_order:
             if not remaining:
                 break
-            target = w.nearest_resource_from_scan(raw_state, scan_key, near=tc)
+
+            # Special handling for livestock — comes from _livestock scan, not _resources_scan
+            if scan_key == "_livestock":
+                livestock = raw_state.get("_livestock", {}).get("owned", [])
+                if not livestock:
+                    continue
+                nearest = min(livestock, key=lambda o: tc.distance_to(Position(o["x"], o["y"])))
+                target = nearest
+            else:
+                target = w.nearest_resource_from_scan(raw_state, scan_key, near=tc)
+
             if not target:
                 continue
 
@@ -392,10 +433,11 @@ class FastCastleStrategy(BaseStrategy):
             if resp.get("action") != "error":
                 actions.append("loom")
 
-        # Feudal advance
-        if w.can_afford(food=500):
+        # Feudal advance — only attempt once
+        if not self._feudal_researching and w.can_afford(food=500):
             resp = self._research("feudal", self.ctrl.advance_to_feudal)
             if resp.get("action") != "error":
+                self._feudal_researching = True
                 actions.append("advance_feudal")
 
     # ================================================================
@@ -403,15 +445,17 @@ class FastCastleStrategy(BaseStrategy):
     # ================================================================
 
     def _do_feudal(self, w: WorldState, raw_state: dict, actions: list[str]) -> None:
+        tc = w.spatial.layout.tc_pos or w.spatial.layout.base_center
+
         # Blacksmith
         if not w.has_building("BLACKSMITH", complete_only=False) and w.can_afford(wood=150):
-            resp = self._smart_build("BLACKSMITH")
+            resp = self._place("BLACKSMITH", tc.x + 8, tc.y + 4)
             if resp.get("action") != "error":
                 actions.append("blacksmith")
 
         # Market
         if not w.has_building("MARKET", complete_only=False) and w.can_afford(wood=175):
-            resp = self._smart_build("MARKET")
+            resp = self._place("MARKET", tc.x - 8, tc.y + 4)
             if resp.get("action") != "error":
                 actions.append("market")
 
@@ -423,14 +467,16 @@ class FastCastleStrategy(BaseStrategy):
         if not tech.get(str(Technology.HORSE_COLLAR), {}).get("researched") and w.has_building("MILL"):
             self._research("hc", lambda: self.ctrl.research(Technology.HORSE_COLLAR))
 
-        # Castle advance
+        # Castle advance — only attempt once
         if (
-            w.can_afford(food=800, gold=200)
+            not self._castle_researching
+            and w.can_afford(food=800, gold=200)
             and w.has_building("BLACKSMITH")
             and w.has_building("MARKET")
         ):
             resp = self._research("castle", self.ctrl.advance_to_castle)
             if resp.get("action") != "error":
+                self._castle_researching = True
                 actions.append("advance_castle")
 
     # ================================================================
@@ -458,9 +504,11 @@ class FastCastleStrategy(BaseStrategy):
                 if resp.get("action") != "error":
                     actions.append("3rd_tc")
 
+        tc = w.spatial.layout.tc_pos or w.spatial.layout.base_center
+
         # Barracks
         if not w.has_building("BARRACKS", complete_only=False) and w.can_afford(wood=175):
-            resp = self._smart_build("BARRACKS")
+            resp = self._place("BARRACKS", tc.x + 10, tc.y - 4)
             if resp.get("action") != "error":
                 actions.append("barracks")
 
@@ -470,7 +518,7 @@ class FastCastleStrategy(BaseStrategy):
             and w.has_building("BARRACKS")
             and w.can_afford(wood=175)
         ):
-            resp = self._smart_build("STABLE")
+            resp = self._place("STABLE", tc.x - 10, tc.y - 4)
             if resp.get("action") != "error":
                 actions.append("stable")
 

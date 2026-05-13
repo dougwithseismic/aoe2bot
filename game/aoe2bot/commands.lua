@@ -146,69 +146,58 @@ function commands.cmdPlaceBuilding(msg)
         table.insert(builders, allVils[i].obj)
     end
 
-    -- 4b. Find a valid position for the full building footprint
+    -- 4b. Find a clear spot for the building footprint
+    --     ALL buildings get footprint scanned — no silent failures on trees/objects
+    --     TC=4x4, most buildings=2x2, houses=2x2
+    local bSize = isTCFoundation and 4 or 2
     local finalX, finalY, finalZ = x, y, 0
 
-    if not isTCFoundation and commands.helpersReady and commands.construction then
-        -- Non-TC: use FindBestPosition (works when TC exists)
-        local findOk, bestPos = pcall(function()
-            return commands.construction:FindBestPosition(typeId, Vector3(x, y, 0), PlacementDirection.SOUTH_WEST, 1, true)
-        end)
-        if findOk and bestPos then
-            finalX = bestPos.x
-            finalY = bestPos.y
-            finalZ = bestPos.z or 0
-        end
-    else
-        -- TC Foundation: scan candidate positions, check full 4x4 footprint
-        local function isFootprintClear(cx, cy, size)
-            local half = math.floor(size / 2)
-            for dx = -half, half do
-                for dy = -half, half do
-                    local tile = GetMapTile(math.floor(cx) + dx, math.floor(cy) + dy)
-                    if not tile or not tile:IsBuildable() then
-                        return false
-                    end
-                    -- Check for static objects (trees, berries, stone) blocking the tile
-                    -- Skip mobile units (vils, scouts, livestock) — they move out of the way
-                    local objs = tile:GetObjects()
-                    if objs then
-                        for _, obj in ipairs(objs) do
-                            local cls = obj:GetClass()
-                            -- 904=villager, 961=scout, 958=livestock — these move
-                            if cls ~= 904 and cls ~= 961 and cls ~= 958 then
-                                return false
-                            end
+    local function isFootprintClear(cx, cy, size)
+        local half = math.floor(size / 2)
+        for dx = -half, half - 1 do
+            for dy = -half, half - 1 do
+                local tile = GetMapTile(math.floor(cx) + dx, math.floor(cy) + dy)
+                if not tile or not tile:IsBuildable() then
+                    return false
+                end
+                local objs = tile:GetObjects()
+                if objs then
+                    for _, obj in ipairs(objs) do
+                        local cls = obj:GetClass()
+                        if cls ~= 904 and cls ~= 961 and cls ~= 958 then
+                            return false
                         end
                     end
                 end
             end
-            return true
         end
+        return true
+    end
 
-        local offsets = {
-            {0, 0}, {3, 0}, {-3, 0}, {0, 3}, {0, -3},
-            {3, 3}, {-3, 3}, {3, -3}, {-3, -3},
-            {6, 0}, {-6, 0}, {0, 6}, {0, -6},
-            {6, 3}, {-6, 3}, {6, -3}, {-6, -3},
-            {3, 6}, {-3, 6}, {3, -6}, {-3, -6},
-        }
-        local found = false
-        for _, off in ipairs(offsets) do
-            local cx = x + off[1]
-            local cy = y + off[2]
-            if isFootprintClear(cx, cy, 4) then
-                finalX = cx
-                finalY = cy
-                local tile = GetMapTile(math.floor(cx), math.floor(cy))
-                if tile then finalZ = tile:GetElevation() end
-                found = true
-                break
-            end
+    local offsets = {
+        {0, 0}, {2, 0}, {-2, 0}, {0, 2}, {0, -2},
+        {2, 2}, {-2, 2}, {2, -2}, {-2, -2},
+        {4, 0}, {-4, 0}, {0, 4}, {0, -4},
+        {4, 2}, {-4, 2}, {4, -2}, {-4, -2},
+        {2, 4}, {-2, 4}, {2, -4}, {-2, -4},
+        {6, 0}, {-6, 0}, {0, 6}, {0, -6},
+        {6, 2}, {-6, 2}, {6, -2}, {-6, -2},
+    }
+    local found = false
+    for _, off in ipairs(offsets) do
+        local cx = x + off[1]
+        local cy = y + off[2]
+        if isFootprintClear(cx, cy, bSize) then
+            finalX = cx
+            finalY = cy
+            local tile = GetMapTile(math.floor(cx), math.floor(cy))
+            if tile then finalZ = tile:GetElevation() end
+            found = true
+            break
         end
-        if not found then
-            return { action = "error", error = "no clear 4x4 spot near " .. x .. "," .. y, step = 4 }
-        end
+    end
+    if not found then
+        return { action = "error", error = "no clear spot near " .. x .. "," .. y .. " (size=" .. bSize .. ")", step = 4 }
     end
 
     -- 5. Place it
