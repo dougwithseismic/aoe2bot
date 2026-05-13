@@ -267,13 +267,16 @@ class EcoManager:
     def _find_all_dropoffs(
         world: WorldState, resource: str,
     ) -> list[Position]:
-        """Return positions of all completed drop-off buildings for this resource."""
+        """Return positions of all drop-off buildings for this resource.
+
+        Includes in-progress buildings — vils can gather near a construction
+        site and will auto-deposit once it completes.
+        """
         building_types = _DROPOFF_BUILDINGS.get(resource, [])
         positions: list[Position] = []
         for btype in building_types:
             for b in world.buildings.get_by_type(btype):
-                if b.is_complete:
-                    positions.append(b.position)
+                positions.append(b.position)
         return positions
 
     @staticmethod
