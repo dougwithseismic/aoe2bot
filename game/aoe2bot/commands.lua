@@ -106,7 +106,35 @@ function commands.cmdPlaceBuilding(msg)
     --    Skip for TC Foundation — both BuildStructure and FindBestPosition
     --    can hang or silently fail when no TC exists
     local isTCFoundation = (typeId == UnitObjectType["TOWN_CENTER_FOUNDATION"])
-    if commands.helpersReady and commands.construction and not isTCFoundation then
+    local isFarm = (resolved == "FARM" or resolved == "FARM_DARK_AGE" or resolved == "FARM_FEUDAL_AGE" or resolved == "FARM_CASTLE_AGE" or resolved == "FARM_IMPERIAL_AGE")
+
+    -- Farms: use GetValidFarmPlacementTile for correct snapped positioning
+    if isFarm and commands.helpersReady and commands.construction then
+        local tileOk, tile = pcall(function()
+            return commands.construction:GetValidFarmPlacementTile()
+        end)
+        if tileOk and tile then
+            local farmOk, farmResult = pcall(function()
+                return commands.construction:BuildStructure(typeId, Vector3(tile.x, tile.y, 0), PlacementDirection.SOUTH_WEST, 0, true)
+            end)
+            if farmOk and farmResult then
+                return {
+                    action = "place_building_result",
+                    success = true,
+                    building = resolved,
+                    buildable = true,
+                    builderCount = 0,
+                    method = "farm_placement",
+                    x = tile.x, y = tile.y, z = 0,
+                    step = 5,
+                }
+            end
+        end
+        -- Fall through to manual method if farm placement fails
+    end
+
+    -- Non-farm, non-TC: use BuildStructure
+    if not isTCFoundation and not isFarm and commands.helpersReady and commands.construction then
         local buildOk, buildResult = pcall(function()
             return commands.construction:BuildStructure(typeId, Vector3(x, y, 0), PlacementDirection.SOUTH_WEST, 1, true)
         end)
@@ -160,14 +188,20 @@ function commands.cmdPlaceBuilding(msg)
                 if not tile or not tile:IsBuildable() then
                     return false
                 end
-                local objs = tile:GetObjects()
-                if objs then
-                    for _, obj in ipairs(objs) do
-                        local cls = obj:GetClass()
-                        if cls ~= 904 and cls ~= 961 and cls ~= 958 then
-                            return false
+                local objCount = 0
+                pcall(function() objCount = tile:GetObjectCount() end)
+                if objCount > 0 then
+                    local hasBlocker = false
+                    pcall(function()
+                        local objs = tile:GetObjects()
+                        for _, obj in ipairs(objs) do
+                            local clsOk, cls = pcall(function() return obj:GetClass() end)
+                            if clsOk and cls ~= 904 and cls ~= 961 and cls ~= 958 then
+                                hasBlocker = true
+                            end
                         end
-                    end
+                    end)
+                    if hasBlocker then return false end
                 end
             end
         end
