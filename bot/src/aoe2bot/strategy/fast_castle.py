@@ -35,6 +35,10 @@ class FastCastleStrategy(BaseStrategy):
         self._scouting_enabled = False
         self._mill_built = False
         self._lc_built = False
+        self._last_pop = 0
+        self._vils_assigned_food = 0
+        self._vils_assigned_wood = 0
+        self._gather_point_set = False
 
     @property
     def name(self) -> str:
@@ -52,17 +56,20 @@ class FastCastleStrategy(BaseStrategy):
         w = world
         actions: list[str] = []
 
+        # ── Scouting — always, even during TC build ──
+        self._do_scout(w)
+
         # ── TC (Nomad) ──
         if not self._has_tc(w, raw_state):
             self._do_build_tc(w, actions)
             self._log(w, actions)
             return actions[0] if actions else None
 
-        # ── Scouting ──
-        self._do_scout(w)
-
         # ── Train villager ──
         self._do_train_vil(w, actions)
+
+        # ── TC gather point — alternate between food and wood ──
+        self._do_gather_point(w, raw_state, actions)
 
         # ── Houses ──
         self._do_houses(w, actions)
@@ -182,6 +189,53 @@ class FastCastleStrategy(BaseStrategy):
             actions.append("train_vil")
 
     # ================================================================
+    # TC Gather Point — new vils auto-walk to the right resource
+    # ================================================================
+
+    def _do_gather_point(self, w: WorldState, raw_state: dict, actions: list[str]) -> None:
+        if not w.tc_is_complete():
+            return
+
+        tc = w.spatial.layout.tc_pos
+        if tc is None:
+            return
+
+        dist = self.eco.get_desired_distribution_world(w)
+
+        # Decide: should next vil go to food or wood?
+        food_need = dist.get("food", 0)
+        wood_need = dist.get("wood", 0)
+
+        if wood_need > 0 and (self._vils_assigned_wood < wood_need or w.wood < 100):
+            target = w.nearest_resource_from_scan(raw_state, "trees", near=tc)
+            resource = "wood"
+        else:
+            target = w.nearest_resource_from_scan(raw_state, "forage", near=tc)
+            resource = "food"
+
+        if target is None:
+            return
+
+        # Set gather point every 10 ticks (don't spam)
+        if self._tick_count % 10 == 1:
+            try:
+                self.ctrl.client.request({
+                    "action": "set_gather_point",
+                    "x": target["x"], "y": target["y"],
+                })
+            except Exception:
+                pass
+
+        # Track new vils — when pop increases, count where they're going
+        if w.population > self._last_pop and self._last_pop > 0:
+            new_vils = w.population - self._last_pop
+            if resource == "food":
+                self._vils_assigned_food += new_vils
+            else:
+                self._vils_assigned_wood += new_vils
+        self._last_pop = w.population
+
+    # ================================================================
     # Houses
     # ================================================================
 
@@ -234,28 +288,49 @@ class FastCastleStrategy(BaseStrategy):
             return
 
         tc = w.spatial.layout.tc_pos or w.spatial.layout.base_center
+        dist = self.eco.get_desired_distribution_world(w)
 
-        # Find closest resource to TC — try food, then wood, then gold
-        target = None
-        resource = None
-        for res, scan_key in [("food", "forage"), ("wood", "trees"), ("gold", "gold")]:
-            obj = w.nearest_resource_from_scan(raw_state, scan_key, near=tc)
-            if obj:
-                target = obj
-                resource = res
+        # Assign idle vils based on desired distribution
+        # Pick the resource with the biggest deficit
+        resource_order: list[tuple[str, str]] = []
+        if dist.get("food", 0) > 0:
+            resource_order.append(("food", "forage"))
+        if dist.get("wood", 0) > 0:
+            resource_order.append(("wood", "trees"))
+        if dist.get("gold", 0) > 0:
+            resource_order.append(("gold", "gold"))
+        if dist.get("stone", 0) > 0:
+            resource_order.append(("stone", "stone"))
+
+        # Sort by urgency: low stockpile = assign first
+        def urgency(res_scan: tuple[str, str]) -> float:
+            res = res_scan[0]
+            current = getattr(w, res, 0)
+            desired = dist.get(res, 0)
+            return desired * (2.0 if current < 100 else 1.0)
+
+        resource_order.sort(key=urgency, reverse=True)
+
+        remaining = list(idle)
+        for res, scan_key in resource_order:
+            if not remaining:
                 break
+            target = w.nearest_resource_from_scan(raw_state, scan_key, near=tc)
+            if not target:
+                continue
 
-        if target is None:
-            return
+            target_pos = Position(target["x"], target["y"])
+            count = min(dist.get(res, 3), len(remaining))
+            if count <= 0:
+                continue
 
-        target_pos = Position(target["x"], target["y"])
+            # Pick closest idle vils to this resource
+            remaining.sort(key=lambda u: u.position.distance_to(target_pos))
+            batch = remaining[:count]
+            remaining = remaining[count:]
 
-        # Send ALL idle vils in batches of 6, closest to the resource first
-        vils = w.nearest_idle_vils(target_pos, count=len(idle))
-        for i in range(0, len(vils), 6):
-            batch = vils[i:i + 6]
             self.ctrl.attack_target([u.id for u in batch], target["id"])
-            actions.append(f"assign_{len(batch)}_{resource}")
+            actions.append(f"assign_{len(batch)}_{res}")
 
     # ================================================================
     # Farms
