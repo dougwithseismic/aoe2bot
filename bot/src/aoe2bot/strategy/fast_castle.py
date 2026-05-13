@@ -776,7 +776,7 @@ class FastCastleStrategy(BaseStrategy):
         """Build farms when food is low. Error-checked placement."""
         if not w.can_afford(wood=60):
             return
-        if not w.commands.can_issue("BUILD", "FARM"):
+        if w.commands.has_active_build("FARM"):
             return
         # Farms require a food drop-off -- mill or completed TC
         if not (w.has_building("MILL", complete_only=False) or w.tc_is_complete()):
@@ -816,7 +816,7 @@ class FastCastleStrategy(BaseStrategy):
                 return resp
             w.commands.issue(
                 "BUILD", target_position=pos, building_type="FARM",
-                game_time=w.game_time, key="FARM",
+                game_time=w.game_time, key=f"FARM_{int(pos.x)}_{int(pos.y)}",
             )
             return resp
 
