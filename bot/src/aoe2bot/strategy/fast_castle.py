@@ -80,15 +80,11 @@ class FastCastleStrategy(BaseStrategy):
         self._train(w, acts)
         self._houses(w, acts)
 
-        # Immediately split starting vils: 3 food, 3 wood
-        if not self._vils_split and w.tc_is_complete():
-            self._split_starting_vils(w, raw_state, acts)
+        # ALL vil assignment goes through one function — strict build order
+        self._assign_by_build_order(w, raw_state, acts)
 
-        # Build eco buildings when we can
+        # Eco buildings at the right time
         self._eco_buildings(w, raw_state, acts)
-
-        # Assign new idle vils by build order number
-        self._assign_new_vils(w, raw_state, acts)
 
         # New livestock found by scout → move to TC
         self._handle_new_livestock(w, acts)
@@ -215,49 +211,61 @@ class FastCastleStrategy(BaseStrategy):
             self._house_cd = 8
             acts.append("h")
 
-    # ── Split starting 6 vils: 3 food, 3 wood ──
+    # ── Unified build order — assigns every idle vil by number ──
 
-    def _split_starting_vils(self, w: WorldState, raw: dict, acts: list[str]) -> None:
-        # Grab ALL vils (not just idle) — VilOcc may have assigned them to wrong things
-        all_vils = [u for u in w.units.get_all() if u.is_villager]
-        if len(all_vils) < 3:
+    def _assign_by_build_order(self, w: WorldState, raw: dict, acts: list[str]) -> None:
+        idle = w.idle_vils()
+        if not idle:
             return
 
         tc = self._tc(w)
 
-        # Find food target (sheep near TC)
-        food_target = self._find_food(w, raw)
-
-        # Find and LOCK wood target (closest trees on safe side)
+        # Lock wood location once
         if self._wood_target is None:
             self._pick_wood_location(w, raw)
 
-        if not food_target and not self._wood_target:
-            return  # Scout hasn't found anything yet
+        food_target = self._find_food(w, raw)
 
-        # Sort all vils by distance to TC
-        all_vils.sort(key=lambda u: u.position.distance_to(tc))
+        for u in idle:
+            n = w.villager_count
 
-        # Standard FC: 6 on food first, then wood. Starting split = all 6 to food
-        # (vil 7 is first wood vil — comes from training, not the starting 6)
-        food_count = len(all_vils)  # ALL starting vils to food
-        if food_target:
-            food_batch = all_vils[:food_count]
-            self.ctrl.attack_target([u.id for u in food_batch], food_target["id"])
-            for u in food_batch:
-                self._assigned_vils.add(u.id)
-            acts.append(f"{food_count}f!")
+            # Build order assignment
+            if n <= 6:
+                # Vils 1-6: ALL to food (sheep)
+                if food_target:
+                    self.ctrl.attack_target([u.id], food_target["id"])
+                    acts.append(f"v{n}f")
+            elif n <= 10:
+                # Vils 7-10: wood
+                if self._wood_target:
+                    self.ctrl.attack_target([u.id], self._wood_target["id"])
+                    acts.append(f"v{n}w")
+            elif n <= 18:
+                # Vils 11-18: food (sheep/berries)
+                if food_target:
+                    self.ctrl.attack_target([u.id], food_target["id"])
+                    acts.append(f"v{n}f")
+            elif n <= 23:
+                # Vils 19-23: wood
+                if self._wood_target:
+                    self.ctrl.attack_target([u.id], self._wood_target["id"])
+                    acts.append(f"v{n}w")
+            elif n <= 26:
+                # Vils 24-26: gold
+                gold = self._scan(w, raw, "gold")
+                if gold:
+                    self.ctrl.attack_target([u.id], gold["id"])
+                    acts.append(f"v{n}g")
+            else:
+                # 27+: balance food/wood
+                if w.food < w.wood and food_target:
+                    self.ctrl.attack_target([u.id], food_target["id"])
+                    acts.append(f"v{n}f")
+                elif self._wood_target:
+                    self.ctrl.attack_target([u.id], self._wood_target["id"])
+                    acts.append(f"v{n}w")
 
-        if self._wood_target:
-            wood_batch = all_vils[food_count:]
-            if wood_batch:
-                self.ctrl.attack_target([u.id for u in wood_batch], self._wood_target["id"])
-                for u in wood_batch:
-                    self._assigned_vils.add(u.id)
-                acts.append(f"{len(wood_batch)}w!")
-
-        self._vils_split = True
-        logger.info("Split %d vils: %d food, %d wood", len(all_vils), food_count, len(all_vils) - food_count)
+            n -= 1
 
     def _find_food(self, w: WorldState, raw: dict) -> dict | None:
         tc = self._tc(w)
@@ -288,28 +296,29 @@ class FastCastleStrategy(BaseStrategy):
         self._wood_target = best
         logger.info("LOCKED wood location: %.0f, %.0f", best["x"], best["y"])
 
-    # ── Eco buildings ──
+    # ── Eco buildings — built at the right vil count ──
 
     def _eco_buildings(self, w: WorldState, raw: dict, acts: list[str]) -> None:
         tc = self._tc(w)
 
-        # Lumber camp at locked wood location
-        if "lc" not in self._built and self._wood_target and w.can_afford(wood=100):
-            if not w.has_building("LUMBER_CAMP", complete_only=False):
+        # LC at vil 8 (vil 7 sent to wood, by 8 we have wood income)
+        if "lc" not in self._built:
+            if w.has_building("LUMBER_CAMP", complete_only=False):
+                self._built.add("lc")
+            elif self._wood_target and w.can_afford(wood=100) and w.villager_count >= 8:
                 tx, ty = self._wood_target["x"], self._wood_target["y"]
                 dx, dy = tc.x - tx, tc.y - ty
                 d = max((dx*dx + dy*dy) ** 0.5, 0.1)
                 lx, ly = tx + dx / d * 4, ty + dy / d * 4
                 if self._ok(self._place("LUMBER_CAMP", lx, ly)):
                     self._built.add("lc")
-                    self._wood_lc_pos = Position(lx, ly)
                     acts.append("lc")
-            else:
-                self._built.add("lc")
 
-        # Mill — at vil 12 (after LC, need berries)
-        if "mill" not in self._built and "lc" in self._built and w.villager_count >= 12:
-            if not w.has_building("MILL", complete_only=False) and w.can_afford(wood=100):
+        # Mill at vil 12
+        if "mill" not in self._built:
+            if w.has_building("MILL", complete_only=False):
+                self._built.add("mill")
+            elif "lc" in self._built and w.can_afford(wood=100) and w.villager_count >= 12:
                 berries = self._scan(w, raw, "forage")
                 if berries and tc.distance_to(Position(berries["x"], berries["y"])) < 12:
                     bx, by = berries["x"], berries["y"]
@@ -321,12 +330,12 @@ class FastCastleStrategy(BaseStrategy):
                 if self._ok(self._place("MILL", mx, my)):
                     self._built.add("mill")
                     acts.append("mill")
-            else:
-                self._built.add("mill")
 
-        # Mining camp — when we need gold (Feudal prep or low gold)
-        if "mc" not in self._built and w.villager_count >= 22:
-            if not w.has_building("MINING_CAMP", complete_only=False) and w.can_afford(wood=100):
+        # Mining camp at vil 24
+        if "mc" not in self._built:
+            if w.has_building("MINING_CAMP", complete_only=False):
+                self._built.add("mc")
+            elif w.can_afford(wood=100) and w.villager_count >= 24:
                 gold = self._scan(w, raw, "gold")
                 if gold:
                     gx, gy = gold["x"], gold["y"]
@@ -335,65 +344,6 @@ class FastCastleStrategy(BaseStrategy):
                     if self._ok(self._place("MINING_CAMP", gx + dx / d * 3, gy + dy / d * 3)):
                         self._built.add("mc")
                         acts.append("mc")
-            else:
-                self._built.add("mc")
-
-    # ── Assign new vils by build order ──
-
-    def _assign_new_vils(self, w: WorldState, raw: dict, acts: list[str]) -> None:
-        # Check ALL idle vils every tick — reassign if resource depleted
-        idle = w.idle_vils()
-        if not idle:
-            return
-
-        n = w.villager_count
-
-        for u in idle:
-            # 27+2 Fast Castle build order:
-            #  1-6:  food (sheep)         — starting vils, handled by _split
-            #  7:    wood (build LC)      — first wood vil
-            #  8-10: wood                 — 4 on wood total
-            #  11:   food (lure boar)     — we send to sheep/berries
-            #  12:   food (build mill)    — then berries
-            #  13-16: food (berries)      — ~11 on food total
-            #  17-18: food (farms)        — transition to farms
-            #  19:   wood (2nd LC)        — 5 more on wood
-            #  20-23: wood                — 9 on wood total
-            #  24:   gold (build MC)      — gold for Castle
-            #  25-26: gold                — 3 on gold total
-            if n <= 6:
-                job = "food"
-            elif n <= 10:
-                job = "wood"    # vils 7-10: wood (4 total)
-            elif n <= 18:
-                job = "food"    # vils 11-18: food (sheep/berries/farms)
-            elif n <= 23:
-                job = "wood"    # vils 19-23: wood (9 total)
-            elif n <= 26:
-                job = "gold"    # vils 24-26: gold (3 total)
-            else:
-                job = "food" if w.food < w.wood else "wood"
-
-            assigned = False
-            if job == "food":
-                target = self._find_food(w, raw)
-                if target:
-                    self.ctrl.attack_target([u.id], target["id"])
-                    assigned = True
-                    acts.append(f"v{n}f")
-            elif job == "wood":
-                if self._wood_target:
-                    self.ctrl.attack_target([u.id], self._wood_target["id"])
-                    assigned = True
-                    acts.append(f"v{n}w")
-            elif job == "gold":
-                gold = self._scan(w, raw, "gold")
-                if gold:
-                    self.ctrl.attack_target([u.id], gold["id"])
-                    assigned = True
-                    acts.append(f"v{n}g")
-
-            n -= 1
 
     # ── New livestock → herd to TC ──
 
