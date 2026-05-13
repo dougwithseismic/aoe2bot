@@ -57,9 +57,19 @@ class UnitTracker:
 
     def __init__(self) -> None:
         self._units: dict[int, TrackedUnit] = {}
+        self._new_units: list[TrackedUnit] = []
+        self._lost_units: list[TrackedUnit] = []
+
+    def get_new_units(self) -> list[TrackedUnit]:
+        return list(self._new_units)
+
+    def get_lost_units(self) -> list[TrackedUnit]:
+        return list(self._lost_units)
 
     def update(self, all_units: list[dict], game_time: float) -> None:
         seen_ids: set[int] = set()
+        self._new_units = []
+        self._lost_units = []
 
         for raw in all_units:
             uid = raw.get("id")
@@ -96,10 +106,12 @@ class UnitTracker:
                 )
                 unit.inferred_task = self._infer_task(unit)
                 self._units[uid] = unit
+                self._new_units.append(unit)
 
         # Remove units no longer reported by the game
         stale = self._units.keys() - seen_ids
         for uid in stale:
+            self._lost_units.append(self._units[uid])
             del self._units[uid]
 
     def get_unit(self, unit_id: int) -> TrackedUnit | None:

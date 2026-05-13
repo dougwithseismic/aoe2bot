@@ -90,6 +90,9 @@ class FastCastleStrategy(BaseStrategy):
         # Assign new idle vils by build order number
         self._assign_new_vils(w, raw_state, acts)
 
+        # New livestock found by scout → move to TC
+        self._handle_new_livestock(w, acts)
+
         # Farms
         if "mill" in self._built:
             self._farms(w, acts)
@@ -389,6 +392,19 @@ class FastCastleStrategy(BaseStrategy):
                     acts.append(f"v{n}g")
 
             n -= 1
+
+    # ── New livestock → herd to TC ──
+
+    def _handle_new_livestock(self, w: WorldState, acts: list[str]) -> None:
+        if not w.tc_is_complete():
+            return
+        tc = self._tc(w)
+        new = w.units.get_new_units()
+        livestock = [u for u in new if u.unit_class == 958]
+        if livestock:
+            ids = [u.id for u in livestock]
+            self.ctrl.move_units(ids, tc.x, tc.y)
+            acts.append(f"{len(ids)}cow")
 
     # ── Farms ──
 

@@ -41,19 +41,19 @@ function Init()
         Log("[AoE2Bot] ERROR: Failed to start IPC server")
     end
 
-    local ok, err = pcall(function()
+    -- ResourceTracker always — needed for scan_resources
+    pcall(function()
         resourceTracker = ResourceTracker:new()
-        -- Skip VillagerOccupation — it auto-assigns all vils on creation,
-        -- sending livestock running across the map on Nomad starts
-        construction = ConstructionPlacement:new()
         helpersReady = true
+        Log("[AoE2Bot] ResourceTracker initialized")
     end)
-    if ok then
-        Log("[AoE2Bot] Helpers initialized (ResourceTracker, ConstructionPlacement)")
-    else
-        Log("[AoE2Bot] WARNING: Helper init failed: " .. tostring(err))
-        helpersReady = false
-    end
+
+    -- NO VillagerOccupation — it auto-assigns all vils + livestock on creation
+    -- Try ConstructionPlacement without it (may fail — that's ok, we have footprint scan)
+    pcall(function()
+        construction = ConstructionPlacement:new()
+        Log("[AoE2Bot] ConstructionPlacement initialized (no VilOcc)")
+    end)
 
     syncGlobals()
 end
