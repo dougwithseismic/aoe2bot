@@ -36,3 +36,21 @@ yarn-error.log*
 # Misc
 .DS_Store
 *.pem
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# AoE2Control binaries (download separately)
+tools/AoE2Control/
+tools/*.zip
+
+# Debug logs
+tools/stdout*.txt
+tools/aoe2control_stdout.txt
