@@ -316,57 +316,64 @@ class FastCastleStrategy(BaseStrategy):
         if not idle:
             return
 
-        result = self.eco.get_idle_assignment_world(w, raw_state)
-        if result is None:
-            return
+        skip_resources: set[str] = set()
 
-        if isinstance(result, DropoffNeeded):
-            # Queue building the drop-off instead of assigning vils
-            if w.queue.has_active(f"build_dropoff_{result.resource}"):
+        # Keep trying until we get an assignment or run out of options
+        for _ in range(4):
+            result = self.eco.get_idle_assignment_world(
+                w, raw_state, skip_resources=skip_resources,
+            )
+            if result is None:
                 return
-            if not w.can_afford(wood=100):  # all drop-offs cost 100 wood
+
+            if isinstance(result, DropoffNeeded):
+                if w.queue.has_active(f"build_dropoff_{result.resource}"):
+                    # Already building this drop-off — skip resource, try next
+                    skip_resources.add(result.resource)
+                    continue
+                if not w.can_afford(wood=100):
+                    skip_resources.add(result.resource)
+                    continue
+
+                ctrl = self.ctrl
+                btype = result.building_type
+                near = result.near
+
+                def build_dropoff(b=btype, n=near, r=result.resource) -> dict:
+                    resp = ctrl.place_building(b, n.x, n.y)
+                    w.commands.issue(
+                        "BUILD", target_position=n, building_type=b,
+                        game_time=w.game_time, key=f"dropoff_{r}",
+                    )
+                    return resp
+
+                w.queue.add_action(QueuedAction(
+                    name=f"build_dropoff_{result.resource}",
+                    priority=Priority.HIGH,
+                    execute=build_dropoff,
+                ))
                 return
+
+            # VilAssignment — send vils to gather
             ctrl = self.ctrl
-            btype = result.building_type
-            near = result.near
+            vil_ids = result.vil_ids
+            target_id = result.target_id
+            resource = result.resource
 
-            def build_dropoff() -> dict:
-                resp = ctrl.place_building(btype, near.x, near.y)
+            def execute(vids=vil_ids, tid=target_id, res=resource) -> dict:
+                resp = ctrl.attack_target(vids, tid)
                 w.commands.issue(
-                    "BUILD", target_position=near, building_type=btype,
-                    game_time=w.game_time, key=f"dropoff_{result.resource}",
+                    "GATHER", unit_ids=vids, target_id=tid,
+                    game_time=w.game_time, key=f"gather_{res}",
                 )
                 return resp
 
             w.queue.add_action(QueuedAction(
-                name=f"build_dropoff_{result.resource}",
+                name=f"assign_vils_{resource}",
                 priority=Priority.HIGH,
-                execute=build_dropoff,
+                execute=execute,
             ))
             return
-
-        # VilAssignment -- send vils to gather
-        if w.queue.has_active("assign_vils"):
-            return
-
-        ctrl = self.ctrl
-        vil_ids = result.vil_ids
-        target_id = result.target_id
-        resource = result.resource
-
-        def execute() -> dict:
-            resp = ctrl.attack_target(vil_ids, target_id)
-            w.commands.issue(
-                "GATHER", unit_ids=vil_ids, target_id=target_id,
-                game_time=w.game_time, key=f"gather_{resource}",
-            )
-            return resp
-
-        w.queue.add_action(QueuedAction(
-            name=f"assign_vils_{resource}",
-            priority=Priority.HIGH,
-            execute=execute,
-        ))
 
     # ================================================================
     # Dark Age
@@ -587,20 +594,26 @@ class FastCastleStrategy(BaseStrategy):
         """Build farms via spatial engine when food is low."""
         if not w.can_afford(wood=60):
             return
-        if w.queue.has_active("build_farm"):
-            return
         # Farms require a food drop-off — mill or completed TC
         if not w.has_building("MILL", complete_only=False) and not w.tc_is_complete():
             return
 
+        # Count existing + in-progress farms
+        farm_count = w.building_count("FARM")
+        food_vils_needed = max(0, w.villager_count // 3 - farm_count)
+
         idle_count = len(w.idle_vils())
         if w.food < 50:
             prio = Priority.URGENT
-        elif w.food < 200 and idle_count >= 2:
+        elif w.food < 200 and (idle_count >= 2 or food_vils_needed > 0):
             prio = Priority.HIGH
         elif w.food < 300 and w.villager_count >= 10:
             prio = Priority.NORMAL
         else:
+            return
+
+        # Queue multiple farms when starving (1 per tick, but don't block with has_active)
+        if w.queue.has_active("build_farm") and prio < Priority.URGENT:
             return
 
         ctrl = self.ctrl

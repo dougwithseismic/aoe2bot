@@ -104,6 +104,7 @@ class EcoManager:
 
     def get_idle_assignment_world(
         self, world: WorldState, raw_state: dict | None = None,
+        skip_resources: set[str] | None = None,
     ) -> VilAssignment | DropoffNeeded | None:
         idle = world.idle_vils()
         if not idle:
@@ -119,18 +120,54 @@ class EcoManager:
         for res_name, desired in dist.items():
             if desired <= 0:
                 continue
+            if skip_resources and res_name in skip_resources:
+                continue
 
             urgency = self._score_urgency(res_name, desired, world)
 
-            target = self._find_best_gather_target(world, raw_state, res_name, base)
-            if target is None:
+            # Try each existing drop-off to find one with resources nearby
+            all_dropoffs = self._find_all_dropoffs(world, res_name)
+            found_viable = False
+
+            for dropoff_pos in all_dropoffs:
+                target = self._find_best_gather_target(
+                    world, raw_state, res_name, dropoff_pos,
+                )
+                if target is not None:
+                    _, tpos = target
+                    if tpos.distance_to(dropoff_pos) <= MAX_DROPOFF_DISTANCE:
+                        target_id, target_pos = target
+                        found_viable = True
+                        break
+
+            if not found_viable:
+                # No drop-off has resources nearby — look for resources near base
+                target = self._find_best_gather_target(
+                    world, raw_state, res_name, base,
+                )
+                if target is None:
+                    continue
+                target_id, target_pos = target
+                # Need a new drop-off — skip food if a mill already exists (use farms)
+                if res_name != "food" or len(all_dropoffs) == 0:
+                    if len(all_dropoffs) == 0 or target_pos.distance_to(base) < MAX_DROPOFF_DISTANCE * 3:
+                        if urgency > best_dropoff_urgency:
+                            best_dropoff_urgency = urgency
+                            dropoff_needed = DropoffNeeded(
+                                building_type=_DROPOFF_TO_BUILD[res_name],
+                                near=target_pos,
+                                resource=res_name,
+                            )
                 continue
-
-            target_id, target_pos = target
-
-            nearest_dropoff = self._find_nearest_dropoff(world, res_name, target_pos)
-
-            if nearest_dropoff is None:
+            else:
+                # No drop-off exists at all — build one (except food when
+                # we'd rather just farm; build first mill only)
+                target = self._find_best_gather_target(
+                    world, raw_state, res_name, base,
+                )
+                if target is None:
+                    continue
+                target_id, target_pos = target
                 if urgency > best_dropoff_urgency:
                     best_dropoff_urgency = urgency
                     dropoff_needed = DropoffNeeded(
@@ -139,12 +176,6 @@ class EcoManager:
                         resource=res_name,
                     )
                 continue
-
-            refined = self._find_best_gather_target(
-                world, raw_state, res_name, nearest_dropoff,
-            )
-            if refined is not None:
-                target_id, target_pos = refined
 
             candidates.append(_GatherCandidate(
                 resource=res_name,
@@ -233,6 +264,19 @@ class EcoManager:
         return best["id"], Position(best["x"], best["y"])
 
     @staticmethod
+    def _find_all_dropoffs(
+        world: WorldState, resource: str,
+    ) -> list[Position]:
+        """Return positions of all completed drop-off buildings for this resource."""
+        building_types = _DROPOFF_BUILDINGS.get(resource, [])
+        positions: list[Position] = []
+        for btype in building_types:
+            for b in world.buildings.get_by_type(btype):
+                if b.is_complete:
+                    positions.append(b.position)
+        return positions
+
+    @staticmethod
     def _find_nearest_dropoff(
         world: WorldState, resource: str, target_pos: Position,
     ) -> Position | None:
@@ -261,32 +305,32 @@ class EcoManager:
         idle: list,
         base: Position,
     ) -> VilAssignment | DropoffNeeded | None:
+        # Try all wood drop-offs to find one with trees nearby
+        for dropoff_pos in self._find_all_dropoffs(world, "wood"):
+            target = self._find_best_gather_target(
+                world, raw_state, "wood", dropoff_pos,
+            )
+            if target is not None:
+                _, tpos = target
+                if tpos.distance_to(dropoff_pos) <= MAX_DROPOFF_DISTANCE:
+                    target_id, target_pos = target
+                    sorted_idle = sorted(
+                        idle, key=lambda u: u.position.distance_to(target_pos),
+                    )
+                    count = min(6, len(sorted_idle))
+                    return VilAssignment(
+                        resource="wood",
+                        vil_ids=[u.id for u in sorted_idle[:count]],
+                        target_id=target_id,
+                    )
+
+        # No drop-off has trees nearby — find trees near base and request drop-off
         target = self._find_best_gather_target(world, raw_state, "wood", base)
         if target is None:
             return None
-
         target_id, target_pos = target
-
-        nearest_dropoff = self._find_nearest_dropoff(world, "wood", target_pos)
-        if nearest_dropoff is None:
-            return DropoffNeeded(
-                building_type="LUMBER_CAMP",
-                near=target_pos,
-                resource="wood",
-            )
-
-        refined = self._find_best_gather_target(
-            world, raw_state, "wood", nearest_dropoff,
-        )
-        if refined is not None:
-            target_id, target_pos = refined
-
-        sorted_idle = sorted(
-            idle, key=lambda u: u.position.distance_to(target_pos),
-        )
-        count = min(6, len(sorted_idle))
-        return VilAssignment(
+        return DropoffNeeded(
+            building_type="LUMBER_CAMP",
+            near=target_pos,
             resource="wood",
-            vil_ids=[u.id for u in sorted_idle[:count]],
-            target_id=target_id,
         )
