@@ -86,13 +86,12 @@ local function dist(a, b)
 end
 
 local function getResources()
-    local r = {}
+    local r = { food = 0, wood = 0, gold = 0, stone = 0 }
     pcall(function()
-        local p = getPlayer()
-        r.food = p:GetResourceAmount(0)
-        r.wood = p:GetResourceAmount(1)
-        r.stone = p:GetResourceAmount(2)
-        r.gold = p:GetResourceAmount(3)
+        r.food = GetFact(Fact.FOOD_AMOUNT)
+        r.wood = GetFact(Fact.WOOD_AMOUNT)
+        r.gold = GetFact(Fact.GOLD_AMOUNT)
+        r.stone = GetFact(Fact.STONE_AMOUNT)
     end)
     return r
 end
@@ -285,17 +284,39 @@ end
 
 local function buildTc()
     if state.tcBuilt then return end
-    if not canAfford(275, 0, 0, 100) then return end
+    if not canAfford(275, 0, 0, 100) then
+        Log("[Strategy] Can't afford TC")
+        return
+    end
     local base = getVilCenter()
-    if not base then return end
+    if not base then
+        Log("[Strategy] No vil center")
+        return
+    end
     local spot = findClearSpot(base.x, base.y, 4)
-    if not spot then return end
+    if not spot then
+        Log("[Strategy] No clear 4x4 spot near " .. math.floor(base.x) .. "," .. math.floor(base.y))
+        return
+    end
     local vils = getVils()
-    if #vils == 0 then return end
-    local typeId = UnitObjectType["TOWN_CENTER_FOUNDATION"] or UnitObjectType["TOWN_CENTER"]
-    if typeId and UnitsBuildStructure(vils, typeId, spot) then
+    if #vils == 0 then
+        Log("[Strategy] No vils")
+        return
+    end
+    local typeId = UnitObjectType["TOWN_CENTER_FOUNDATION"]
+    if not typeId then
+        Log("[Strategy] TC_FOUNDATION type not found, trying TOWN_CENTER")
+        typeId = UnitObjectType["TOWN_CENTER"]
+    end
+    if not typeId then
+        Log("[Strategy] No TC type found at all!")
+        return
+    end
+    Log("[Strategy] Building TC type=" .. typeId .. " at " .. math.floor(spot.x) .. "," .. math.floor(spot.y) .. " with " .. #vils .. " vils")
+    local ok = UnitsBuildStructure(vils, typeId, spot)
+    Log("[Strategy] UnitsBuildStructure result: " .. tostring(ok))
+    if ok then
         state.tcBuilt = true
-        Log("[Strategy] TC placed at " .. math.floor(spot.x) .. "," .. math.floor(spot.y))
     end
 end
 
@@ -640,9 +661,17 @@ function strategy.update(rt)
     if state.houseCd > 0 then state.houseCd = state.houseCd - 1 end
     if state.farmCd > 0 then state.farmCd = state.farmCd - 1 end
 
+    if state.tick == 1 then
+        local r = getResources()
+        Log("[Strategy] First tick - F:" .. r.food .. " W:" .. r.wood .. " G:" .. r.gold .. " S:" .. r.stone)
+    end
+
     doScout()
 
     if not hasTc() then
+        if state.tick % 10 == 1 then
+            Log("[Strategy] No TC - building...")
+        end
         buildTc()
         moveLivestockToBase()
         return
