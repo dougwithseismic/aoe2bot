@@ -12,8 +12,8 @@ from typing import TYPE_CHECKING
 from ..protocol import Technology
 from .actions import Priority
 from .base import BaseStrategy
-from .eco import EcoManager
-from .event_queue import ActionSequence, QueuedAction, WaitCondition
+from .eco import DropoffNeeded, EcoManager, VilAssignment
+from .event_queue import QueuedAction
 from .spatial import PlacementGoal, Position
 
 if TYPE_CHECKING:
@@ -311,21 +311,48 @@ class FastCastleStrategy(BaseStrategy):
     # ================================================================
 
     def _eval_idle_vils(self, w: WorldState, raw_state: dict) -> None:
-        """Assign idle vils to the most-needed resource."""
+        """Assign idle vils to the most-needed resource, or build a drop-off."""
         idle = w.idle_vils()
         if not idle:
             return
+
+        result = self.eco.get_idle_assignment_world(w, raw_state)
+        if result is None:
+            return
+
+        if isinstance(result, DropoffNeeded):
+            # Queue building the drop-off instead of assigning vils
+            if w.queue.has_active(f"build_dropoff_{result.resource}"):
+                return
+            if not w.can_afford(wood=100):  # all drop-offs cost 100 wood
+                return
+            ctrl = self.ctrl
+            btype = result.building_type
+            near = result.near
+
+            def build_dropoff() -> dict:
+                resp = ctrl.place_building(btype, near.x, near.y)
+                w.commands.issue(
+                    "BUILD", target_position=near, building_type=btype,
+                    game_time=w.game_time, key=f"dropoff_{result.resource}",
+                )
+                return resp
+
+            w.queue.add_action(QueuedAction(
+                name=f"build_dropoff_{result.resource}",
+                priority=Priority.HIGH,
+                execute=build_dropoff,
+            ))
+            return
+
+        # VilAssignment -- send vils to gather
         if w.queue.has_active("assign_vils"):
             return
 
-        assignment = self.eco.get_idle_assignment_world(w, raw_state)
-        if assignment is None:
-            return
-
         ctrl = self.ctrl
-        vil_ids = assignment.vil_ids
-        target_id = assignment.target_id
-        resource = assignment.resource
+        vil_ids = result.vil_ids
+        target_id = result.target_id
+        resource = result.resource
 
         def execute() -> dict:
             resp = ctrl.attack_target(vil_ids, target_id)
@@ -346,25 +373,8 @@ class FastCastleStrategy(BaseStrategy):
     # ================================================================
 
     def _dark_age(self, w: WorldState, raw_state: dict) -> None:
-        # Lumber camp near trees (sequence: place + wait for foundation)
-        if (
-            not w.has_building("LUMBER_CAMP", complete_only=False)
-            and w.commands.can_issue("BUILD", "LUMBER_CAMP")
-            and not w.queue.has_active("setup_wood")
-            and w.can_afford(wood=100)
-            and w.villager_count >= 6
-        ):
-            self._queue_lumber_camp_sequence(w)
-
-        # Mill near berries (sequence: place mill, wait, then farms)
-        if (
-            not w.has_building("MILL", complete_only=False)
-            and w.commands.can_issue("BUILD", "MILL")
-            and not w.queue.has_active("setup_food")
-            and w.can_afford(wood=100)
-            and w.villager_count >= 6
-        ):
-            self._queue_food_eco_sequence(w)
+        # Lumber camp and mill are now handled by the eco manager's
+        # DropoffNeeded logic in _eval_idle_vils.
 
         # Loom
         tech = raw_state.get(_TECH_STATE_KEY, {})
@@ -570,115 +580,8 @@ class FastCastleStrategy(BaseStrategy):
             ))
 
     # ================================================================
-    # Multi-step sequences
+    # Farms
     # ================================================================
-
-    def _queue_lumber_camp_sequence(self, w: WorldState) -> None:
-        """Place lumber camp near trees, then wait for foundation to appear."""
-        ctrl = self.ctrl
-        spatial = w.spatial
-
-        def build_lumber_camp() -> dict:
-            pos = spatial.find_lumber_camp_spot()
-            if pos is None:
-                resp = ctrl.smart_build("LUMBER_CAMP", padding=0)
-            else:
-                resp = ctrl.place_building("LUMBER_CAMP", pos.x, pos.y)
-            w.commands.issue(
-                "BUILD", target_position=pos, building_type="LUMBER_CAMP",
-                game_time=w.game_time, key="LUMBER_CAMP",
-            )
-            return resp
-
-        w.queue.add_sequence(ActionSequence(
-            name="setup_wood_eco",
-            priority=Priority.HIGH,
-            steps=[
-                QueuedAction(
-                    name="place_lumber_camp",
-                    priority=Priority.HIGH,
-                    execute=build_lumber_camp,
-                ),
-                WaitCondition(
-                    name="wait_lumber_camp_foundation",
-                    check=lambda: w.has_building("LUMBER_CAMP", complete_only=False),
-                    timeout=20.0,
-                    on_timeout="skip",
-                ),
-            ],
-        ))
-
-    def _queue_food_eco_sequence(self, w: WorldState) -> None:
-        """Place mill near berries, wait for it, then queue farms around it."""
-        ctrl = self.ctrl
-        spatial = w.spatial
-
-        def build_mill() -> dict:
-            pos = spatial.find_mill_spot()
-            if pos is None:
-                resp = ctrl.smart_build("MILL", padding=0)
-            else:
-                resp = ctrl.place_building("MILL", pos.x, pos.y)
-            w.commands.issue(
-                "BUILD", target_position=pos, building_type="MILL",
-                game_time=w.game_time, key="MILL",
-            )
-            return resp
-
-        def build_farm_near_mill() -> dict:
-            mill = w.buildings.get_nearest("MILL", w.spatial.layout.base_center)
-            center = mill.position if mill else w.spatial.layout.base_center
-            pos = spatial.find_placement("FARM", goal=PlacementGoal.FARM_RING, near=center)
-            if pos is None:
-                pos = center.offset(3, 0)
-            resp = ctrl.place_building("FARM", pos.x, pos.y)
-            w.commands.issue(
-                "BUILD", target_position=pos, building_type="FARM",
-                game_time=w.game_time, key=f"FARM_{pos}",
-            )
-            return resp
-
-        w.queue.add_sequence(ActionSequence(
-            name="setup_food_eco",
-            priority=Priority.HIGH,
-            steps=[
-                QueuedAction(
-                    name="place_mill",
-                    priority=Priority.HIGH,
-                    execute=build_mill,
-                ),
-                WaitCondition(
-                    name="wait_mill_foundation",
-                    check=lambda: w.has_building("MILL", complete_only=False),
-                    timeout=20.0,
-                    on_timeout="skip",
-                ),
-                WaitCondition(
-                    name="wait_mill_complete",
-                    check=lambda: w.has_building("MILL", complete_only=True),
-                    timeout=90.0,
-                    on_timeout="skip",  # start farms even if mill isn't done
-                ),
-                QueuedAction(
-                    name="place_farm_1",
-                    priority=Priority.HIGH,
-                    execute=build_farm_near_mill,
-                    condition=lambda: w.can_afford(wood=60),
-                ),
-                QueuedAction(
-                    name="place_farm_2",
-                    priority=Priority.HIGH,
-                    execute=build_farm_near_mill,
-                    condition=lambda: w.can_afford(wood=60),
-                ),
-                QueuedAction(
-                    name="place_farm_3",
-                    priority=Priority.HIGH,
-                    execute=build_farm_near_mill,
-                    condition=lambda: w.can_afford(wood=60),
-                ),
-            ],
-        ))
 
     def _eval_farms(self, w: WorldState) -> None:
         """Build farms via spatial engine when food is low."""
@@ -686,8 +589,8 @@ class FastCastleStrategy(BaseStrategy):
             return
         if w.queue.has_active("build_farm"):
             return
-        # Farms require a mill — don't attempt without one
-        if not w.has_building("MILL", complete_only=False):
+        # Farms require a food drop-off — mill or completed TC
+        if not w.has_building("MILL", complete_only=False) and not w.tc_is_complete():
             return
 
         idle_count = len(w.idle_vils())

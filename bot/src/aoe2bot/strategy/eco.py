@@ -1,9 +1,9 @@
 """Eco manager -- decides where idle villagers should go.
 
-No VillagerOccupation integration. No priority ratios.
-Just: how many vils per resource, and where to send idle ones.
-
-Supports both legacy AdaptiveState and new WorldState interfaces.
+Drop-off-building aware: checks that a lumber camp / mining camp / mill
+exists near the target resource cluster before assigning vils.  If not,
+returns a DropoffNeeded instead of a VilAssignment so the caller can
+build one first.
 """
 
 from __future__ import annotations
@@ -13,10 +13,29 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .state import AdaptiveState
     from .world import WorldState
 
+from .spatial import Position
+
 logger = logging.getLogger(__name__)
+
+MAX_DROPOFF_DISTANCE = 10.0
+
+_SCAN_KEYS = {"food": "forage", "wood": "trees", "gold": "gold", "stone": "stone"}
+
+_DROPOFF_BUILDINGS: dict[str, list[str]] = {
+    "wood": ["LUMBER_CAMP", "TOWN_CENTER"],
+    "food": ["MILL", "TOWN_CENTER"],
+    "gold": ["MINING_CAMP", "TOWN_CENTER"],
+    "stone": ["MINING_CAMP", "TOWN_CENTER"],
+}
+
+_DROPOFF_TO_BUILD: dict[str, str] = {
+    "wood": "LUMBER_CAMP",
+    "food": "MILL",
+    "gold": "MINING_CAMP",
+    "stone": "MINING_CAMP",
+}
 
 
 @dataclass
@@ -27,9 +46,20 @@ class VilAssignment:
     target_id: int
 
 
-# Map from our resource names to scan_resources keys
-_SCAN_KEYS = {"food": "forage", "wood": "trees", "gold": "gold", "stone": "stone"}
-_FOOD_FALLBACKS = ("livestock", "farms")
+@dataclass
+class DropoffNeeded:
+    """No drop-off building within range -- caller should build one first."""
+    building_type: str
+    near: Position
+    resource: str
+
+
+@dataclass
+class _GatherCandidate:
+    resource: str
+    urgency: float
+    target_id: int
+    target_pos: Position
 
 
 class EcoManager:
@@ -42,82 +72,7 @@ class EcoManager:
     def __init__(self) -> None:
         self._last_assigned: str = ""
 
-    def get_desired_distribution(self, state: AdaptiveState) -> dict[str, int]:
-        """Target vil count per resource given current game state."""
-        n = state.villager_count
-
-        if state.age == 0:
-            # Dark Age: food-heavy, then wood for buildings
-            if n <= 6:
-                return {"food": n, "wood": 0, "gold": 0, "stone": 0}
-            if n <= 10:
-                return {"food": 6, "wood": n - 6, "gold": 0, "stone": 0}
-            wood = min(6, n - 10)
-            return {"food": n - wood, "wood": wood, "gold": 0, "stone": 0}
-
-        if state.age == 1:
-            # Feudal: need gold for Castle Age (800f + 200g)
-            gold = 4 if state.gold < 100 else (3 if state.gold < 200 else 2)
-            wood = max(4, min(6, n - 14))
-            food = max(0, n - wood - gold)
-            return {"food": food, "wood": wood, "gold": gold, "stone": 0}
-
-        # Castle Age+: balanced with optional stone for extra TCs
-        stone = 3 if state.tc_count < 2 and state.stone < 100 else 0
-        gold = 5
-        wood = max(6, min(10, n - 20))
-        food = max(0, n - wood - gold - stone)
-        return {"food": food, "wood": wood, "gold": gold, "stone": stone}
-
-    def get_idle_assignment(self, state: AdaptiveState) -> VilAssignment | None:
-        """Pick the best resource to send idle villagers to (legacy interface).
-
-        Rotates between resources that need vils so we don't overload
-        one depleted bush or treeline.
-        """
-        if not state.idle_vil_ids or not state.resources_scan:
-            return None
-
-        dist = self.get_desired_distribution(state)
-        scan = state.resources_scan
-
-        # Score each resource by urgency
-        candidates: list[tuple[str, float, int]] = []
-        for res_name, desired in dist.items():
-            if desired <= 0:
-                continue
-            target_id = _find_resource_target(scan, res_name)
-            if target_id is None:
-                continue
-
-            urgency = float(desired)
-            # Boost urgency if we're low on this resource
-            current = getattr(state, res_name, 0)
-            if current < 100:
-                urgency *= 2.0
-            if current < 50:
-                urgency *= 1.5
-            # Penalize the resource we just assigned to (rotation)
-            if res_name == self._last_assigned:
-                urgency *= 0.5
-            candidates.append((res_name, urgency, target_id))
-
-        if not candidates:
-            return None
-
-        candidates.sort(key=lambda c: c[1], reverse=True)
-        chosen_res, _, target_id = candidates[0]
-        self._last_assigned = chosen_res
-
-        # Send up to 4 vils per tick to avoid overloading one node
-        count = min(4, len(state.idle_vil_ids))
-        return VilAssignment(
-            resource=chosen_res,
-            vil_ids=state.idle_vil_ids[:count],
-            target_id=target_id,
-        )
-
-    # ── WorldState-aware interface ──
+    # ── Distribution ──
 
     def get_desired_distribution_world(self, world: WorldState) -> dict[str, int]:
         """Target vil count per resource using WorldState."""
@@ -138,7 +93,6 @@ class EcoManager:
             food = max(0, n - wood - gold)
             return {"food": food, "wood": wood, "gold": gold, "stone": 0}
 
-        # Castle Age+
         tc_count = world.building_count("TOWN_CENTER")
         stone = 3 if tc_count < 2 and world.stone < 100 else 0
         gold = 5
@@ -146,112 +100,193 @@ class EcoManager:
         food = max(0, n - wood - gold - stone)
         return {"food": food, "wood": wood, "gold": gold, "stone": stone}
 
+    # ── Assignment ──
+
     def get_idle_assignment_world(
         self, world: WorldState, raw_state: dict | None = None,
-    ) -> VilAssignment | None:
-        """Pick the best resource to send idle villagers to using WorldState.
-
-        Uses world.map.get_nearest_resource() to find gathering targets
-        instead of raw scan data. Falls back to scan data if map has no
-        resources discovered yet.
-        """
+    ) -> VilAssignment | DropoffNeeded | None:
         idle = world.idle_vils()
         if not idle:
             return None
 
-        idle_ids = [u.id for u in idle]
         base = world.spatial.layout.base_center
         dist = self.get_desired_distribution_world(world)
 
-        # Score each resource by urgency, find target via MapKnowledge
-        candidates: list[tuple[str, float, int]] = []
+        candidates: list[_GatherCandidate] = []
+        dropoff_needed: DropoffNeeded | None = None
+        best_dropoff_urgency: float = -1.0
+
         for res_name, desired in dist.items():
             if desired <= 0:
                 continue
 
-            target_id = self._find_target_via_map(world, res_name, base)
+            urgency = self._score_urgency(res_name, desired, world)
 
-            # Fall back to raw scan if MapKnowledge doesn't have the resource
-            if target_id is None and raw_state is not None:
-                scan = raw_state.get("_resources_scan")
-                if scan:
-                    target_id = _find_resource_target(scan, res_name)
-
-            if target_id is None:
+            target = self._find_best_gather_target(world, raw_state, res_name, base)
+            if target is None:
                 continue
 
-            urgency = float(desired)
-            current = getattr(world, res_name, 0)
-            if current < 100:
-                urgency *= 2.0
-            if current < 50:
-                urgency *= 1.5
-            if res_name == self._last_assigned:
-                urgency *= 0.5
-            candidates.append((res_name, urgency, target_id))
+            target_id, target_pos = target
+
+            nearest_dropoff = self._find_nearest_dropoff(world, res_name, target_pos)
+
+            if nearest_dropoff is None:
+                if urgency > best_dropoff_urgency:
+                    best_dropoff_urgency = urgency
+                    dropoff_needed = DropoffNeeded(
+                        building_type=_DROPOFF_TO_BUILD[res_name],
+                        near=target_pos,
+                        resource=res_name,
+                    )
+                continue
+
+            refined = self._find_best_gather_target(
+                world, raw_state, res_name, nearest_dropoff,
+            )
+            if refined is not None:
+                target_id, target_pos = refined
+
+            candidates.append(_GatherCandidate(
+                resource=res_name,
+                urgency=urgency,
+                target_id=target_id,
+                target_pos=target_pos,
+            ))
 
         if not candidates:
-            # Fallback: send idle vils to wood (trees always exist)
-            wood_target = self._find_target_via_map(world, "wood", base)
-            if wood_target is None and raw_state is not None:
-                scan = raw_state.get("_resources_scan")
-                if scan:
-                    wood_target = _find_resource_target(scan, "wood")
-            if wood_target is not None:
-                count = min(6, len(idle_ids))
-                return VilAssignment(
-                    resource="wood",
-                    vil_ids=idle_ids[:count],
-                    target_id=wood_target,
-                )
-            return None
+            if dropoff_needed is not None:
+                return dropoff_needed
 
-        candidates.sort(key=lambda c: c[1], reverse=True)
-        chosen_res, _, target_id = candidates[0]
-        self._last_assigned = chosen_res
+            wood_result = self._try_wood_fallback(world, raw_state, idle, base)
+            if wood_result is not None:
+                return wood_result
+            return dropoff_needed
 
-        count = min(6, len(idle_ids))
+        candidates.sort(key=lambda c: c.urgency, reverse=True)
+        chosen = candidates[0]
+        self._last_assigned = chosen.resource
+
+        sorted_idle = sorted(
+            idle, key=lambda u: u.position.distance_to(chosen.target_pos),
+        )
+        count = min(6, len(sorted_idle))
+
         return VilAssignment(
-            resource=chosen_res,
-            vil_ids=idle_ids[:count],
-            target_id=target_id,
+            resource=chosen.resource,
+            vil_ids=[u.id for u in sorted_idle[:count]],
+            target_id=chosen.target_id,
         )
 
+    # ── Private helpers ──
+
+    def _score_urgency(
+        self, res_name: str, desired: int, world: WorldState,
+    ) -> float:
+        urgency = float(desired)
+        current = getattr(world, res_name, 0)
+        if current < 100:
+            urgency *= 2.0
+        if current < 50:
+            urgency *= 1.5
+        if res_name == self._last_assigned:
+            urgency *= 0.5
+        return urgency
+
     @staticmethod
-    def _find_target_via_map(
-        world: WorldState, resource: str, near: object,
-    ) -> int | None:
-        """Find a resource target ID using MapKnowledge nearest-resource lookup."""
-        from .spatial import Position
-
-        if not isinstance(near, Position):
-            return None
-
-        # Map resource name to MapKnowledge resource_type
-        map_keys = {"food": "forage", "wood": "trees", "gold": "gold", "stone": "stone"}
-        map_key = map_keys.get(resource)
-        if map_key is None:
-            return None
+    def _find_best_gather_target(
+        world: WorldState,
+        raw_state: dict | None,
+        resource: str,
+        near: Position,
+    ) -> tuple[int, Position] | None:
+        """Find the resource object closest to *near*, checking MapKnowledge then raw scan."""
+        map_key = _SCAN_KEYS.get(resource, resource)
 
         known = world.map.get_nearest_resource(map_key, near)
         if known is not None:
-            return known.id
+            return known.id, known.position
 
-        # Food fallback: try forage first (already tried), then look for farms
-        # Farms don't appear in MapKnowledge resources, so we'd need raw scan
-        return None
+        if resource == "food":
+            for alt in ("livestock",):
+                known = world.map.get_nearest_resource(alt, near)
+                if known is not None:
+                    return known.id, known.position
 
+        if raw_state is None:
+            return None
 
-def _find_resource_target(scan: dict, resource: str) -> int | None:
-    """Find the first valid resource object ID from a scan_resources response."""
-    scan_key = _SCAN_KEYS.get(resource, resource)
-    objects = scan.get(scan_key, [])
-    if objects:
-        return objects[0].get("id")
-    # Food fallback: try livestock, then farms
-    if resource == "food":
-        for key in _FOOD_FALLBACKS:
-            objects = scan.get(key, [])
-            if objects:
-                return objects[0].get("id")
-    return None
+        scan = raw_state.get("_resources_scan")
+        if not scan:
+            return None
+
+        objects = scan.get(map_key, [])
+        if resource == "food" and not objects:
+            for fallback_key in ("livestock", "farms"):
+                objects = scan.get(fallback_key, [])
+                if objects:
+                    break
+
+        if not objects:
+            return None
+
+        best = min(objects, key=lambda o: near.distance_to(Position(o["x"], o["y"])))
+        return best["id"], Position(best["x"], best["y"])
+
+    @staticmethod
+    def _find_nearest_dropoff(
+        world: WorldState, resource: str, target_pos: Position,
+    ) -> Position | None:
+        """Return position of the closest completed drop-off building for *resource*,
+        or None if nothing within MAX_DROPOFF_DISTANCE."""
+        building_types = _DROPOFF_BUILDINGS.get(resource, [])
+
+        best_pos: Position | None = None
+        best_dist = MAX_DROPOFF_DISTANCE
+
+        for btype in building_types:
+            b = world.buildings.get_nearest(btype, target_pos)
+            if b is None or not b.is_complete:
+                continue
+            d = target_pos.distance_to(b.position)
+            if d < best_dist:
+                best_dist = d
+                best_pos = b.position
+
+        return best_pos
+
+    def _try_wood_fallback(
+        self,
+        world: WorldState,
+        raw_state: dict | None,
+        idle: list,
+        base: Position,
+    ) -> VilAssignment | DropoffNeeded | None:
+        target = self._find_best_gather_target(world, raw_state, "wood", base)
+        if target is None:
+            return None
+
+        target_id, target_pos = target
+
+        nearest_dropoff = self._find_nearest_dropoff(world, "wood", target_pos)
+        if nearest_dropoff is None:
+            return DropoffNeeded(
+                building_type="LUMBER_CAMP",
+                near=target_pos,
+                resource="wood",
+            )
+
+        refined = self._find_best_gather_target(
+            world, raw_state, "wood", nearest_dropoff,
+        )
+        if refined is not None:
+            target_id, target_pos = refined
+
+        sorted_idle = sorted(
+            idle, key=lambda u: u.position.distance_to(target_pos),
+        )
+        count = min(6, len(sorted_idle))
+        return VilAssignment(
+            resource="wood",
+            vil_ids=[u.id for u in sorted_idle[:count]],
+            target_id=target_id,
+        )
