@@ -5,6 +5,7 @@
 local util = require("util")
 local queries = require("queries")
 local commands = require("commands")
+local strategy = require("strategy")
 
 local PIPE_NAME = "AoE2Bot_Pipe"
 local pipe_connected = false
@@ -61,9 +62,10 @@ end
 function Update()
     if helpersReady then
         pcall(function() resourceTracker:Update() end)
-        -- NOT calling vilOccupation:Update() — it hijacks all vil assignments
-        -- NOT calling construction:Update() or ProcessBuildingRequests()
     end
+
+    -- Run build order strategy every tick
+    pcall(function() strategy.update(resourceTracker) end)
 
     if not pipe_connected then return end
     if not IPC.HasMessages() then return end
