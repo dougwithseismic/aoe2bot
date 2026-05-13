@@ -307,15 +307,9 @@ class FastCastleStrategy(BaseStrategy):
         if not w.has_building("MILL"):
             return
 
-        # How many farms do we need? Roughly 1 per 2 food vils
-        desired_food = self.eco.get_desired_distribution_world(w).get("food", 0)
         farm_count = w.building_count("FARM")
-        idle_count = len(w.idle_vils())
-
-        # Build farms when: low food, or idle vils with no food source, or not enough farms
         needs_farm = (
-            (w.food < 300 and farm_count < desired_food)
-            or (idle_count > 2 and w.food < 100)
+            (w.food < 300 and farm_count < w.villager_count // 3)
             or farm_count < max(3, w.villager_count // 4)
         )
         if not needs_farm:
@@ -323,20 +317,14 @@ class FastCastleStrategy(BaseStrategy):
         if not w.can_afford(wood=60):
             return
 
-        tc = self._tc(w)
-        pos = w.spatial.find_placement("FARM", goal=PlacementGoal.FARM_RING, near=tc)
-        if pos is None:
-            pos = tc.offset(3, 3)
-
-        # Don't place on existing farm positions
-        key = (int(pos.x), int(pos.y))
-        if key in [(int(p[0]), int(p[1])) for p in self._farm_positions]:
-            pos = tc.offset(-3, -3)
-            key = (int(pos.x), int(pos.y))
-
-        if self._ok(self._place("FARM", pos.x, pos.y)):
-            self._farm_positions.append((pos.x, pos.y))
+        # Use smart_build which calls BuildStructureAtTown — handles farm snapping
+        resp = self.ctrl.smart_build("FARM", padding=0)
+        if self._ok(resp):
             acts.append("farm")
+        else:
+            # Fallback: try place_building near TC
+            tc = self._tc(w)
+            self._place("FARM", tc.x + 3, tc.y + 3)
 
     # ── Livestock ──
 

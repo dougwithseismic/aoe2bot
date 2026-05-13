@@ -60,8 +60,9 @@ end
 function Update()
     if helpersReady then
         pcall(function() resourceTracker:Update() end)
+        pcall(function() vilOccupation:Update() end)
         -- NOT calling construction:Update() or ProcessBuildingRequests()
-        -- Python controls all building via place_building / smart_build commands
+        -- vilOccupation:Update() needed so BuildStructureAtTown can find builders
     end
 
     if not pipe_connected then return end
