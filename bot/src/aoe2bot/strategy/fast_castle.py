@@ -159,33 +159,20 @@ class FastCastleStrategy(BaseStrategy):
                 return
 
         if self._scout_phase == 0:
-            # Manual scout toward fog of war — prioritize safe side (map edge)
-            if self._scout_waypoint >= 6:
+            # Circle around base at radius 15, starting from safe side
+            if self._scout_waypoint >= 8:
                 self._scout_phase = 1
                 return
 
-            if self._tick % 5 != 1:
+            if self._tick % 4 != 1:
                 return
 
             base = w.spatial.layout.base_center
             safe = w.spatial.layout.safe_side()
-
-            # Find unexplored direction from MapKnowledge
-            unexplored = w.map.get_unexplored_direction(base)
-
-            if unexplored is not None:
-                # Bias toward safe side
-                dx = unexplored.x + safe.x * 0.5
-                dy = unexplored.y + safe.y * 0.5
-                d = max((dx*dx + dy*dy) ** 0.5, 0.1)
-                radius = 12 + self._scout_waypoint * 4
-                tx = base.x + dx / d * radius
-                ty = base.y + dy / d * radius
-            else:
-                # Everything explored nearby — expand outward on safe side
-                radius = 15 + self._scout_waypoint * 5
-                tx = base.x + safe.x * radius
-                ty = base.y + safe.y * radius
+            start_angle = math.atan2(safe.y, safe.x)
+            angle = start_angle + (self._scout_waypoint / 8) * 2 * math.pi
+            tx = base.x + 15 * math.cos(angle)
+            ty = base.y + 15 * math.sin(angle)
 
             self.ctrl.move_units([self._scout_id], tx, ty)
             self._scout_waypoint += 1
