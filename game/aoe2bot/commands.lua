@@ -133,8 +133,8 @@ function commands.cmdPlaceBuilding(msg)
         -- Fall through to manual method if farm placement fails
     end
 
-    -- Non-farm, non-TC: use BuildStructure
-    if not isTCFoundation and not isFarm and commands.helpersReady and commands.construction then
+    -- Non-farm, non-TC: use BuildStructure (skip if caller specified builder_ids)
+    if not isTCFoundation and not isFarm and not msg.builder_ids and commands.helpersReady and commands.construction then
         local buildOk, buildResult = pcall(function()
             return commands.construction:BuildStructure(typeId, Vector3(x, y, 0), PlacementDirection.SOUTH_WEST, 1, true)
         end)
