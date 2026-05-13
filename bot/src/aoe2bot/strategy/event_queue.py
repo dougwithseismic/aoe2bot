@@ -138,7 +138,9 @@ class EventQueue:
                 continue
 
             if isinstance(step, WaitCondition):
-                return self._handle_wait(seq, step, game_time)
+                self._handle_wait(seq, step, game_time)
+                # WaitConditions don't consume the tick — let standalone actions fire
+                continue
 
             if isinstance(step, QueuedAction):
                 try:

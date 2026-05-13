@@ -104,6 +104,7 @@ function handleAction(msg)
     elseif a == "get_players" then return getPlayers()
     elseif a == "scan_world" then return scanWorld(msg)
     elseif a == "scan_resources" then return scanResources()
+    elseif a == "scan_livestock" then return scanLivestock()
     elseif a == "diag" then return runDiagnostics()
     elseif a == "enum_lookup" then return enumLookup(msg)
     elseif a == "get_tech_state" then return cmdGetTechState(msg)
@@ -135,8 +136,7 @@ function handleAction(msg)
     elseif a == "attack_move" then return cmdAttackMove(msg)
     elseif a == "patrol" then return cmdPatrol(msg)
     elseif a == "garrison" then return cmdGarrison(msg)
-    elseif a == "scout" then
-        return { action = "scout_result", success = EnableScouting() }
+    elseif a == "scout" then return cmdAutoScout(msg)
     elseif a == "set_stance" then return cmdSetStance(msg)
     elseif a == "set_gather_point" then return cmdSetGatherPoint(msg)
     elseif a == "delete_unit" then return cmdDeleteUnit(msg)
@@ -330,6 +330,38 @@ function scanResources()
             if i > 10 then break end
             local pos = f:GetPosition()
             table.insert(result.forage, { id = f:GetId(), x = pos.x, y = pos.y })
+        end
+    end)
+
+    return result
+end
+
+function scanLivestock()
+    if not helpersReady or not resourceTracker then
+        return { action = "error", error = "ResourceTracker not initialized" }
+    end
+
+    local result = { action = "livestock_scan", convertible = {}, owned = {} }
+
+    pcall(function()
+        local p = GetAssignedPlayer()
+        if not p then return end
+        local tcs = p:GetTownCenters()
+        local tcPos = nil
+        if #tcs > 0 then tcPos = tcs[1]:GetPosition() end
+
+        local conv = resourceTracker:GetConvertibleLivestock(tcPos or Vector3(100,100,0), 100)
+        for i, obj in ipairs(conv) do
+            if i > 20 then break end
+            local pos = obj:GetPosition()
+            table.insert(result.convertible, { id = obj:GetId(), x = pos.x, y = pos.y })
+        end
+
+        local owned = resourceTracker:GetOwnedLivestock()
+        for i, obj in ipairs(owned) do
+            if i > 20 then break end
+            local pos = obj:GetPosition()
+            table.insert(result.owned, { id = obj:GetId(), x = pos.x, y = pos.y })
         end
     end)
 
@@ -732,7 +764,28 @@ function cmdPlaceBuilding(msg)
         return { action = "error", error = "cannot afford " .. resolved, step = 2 }
     end
 
-    -- 3. Find closest vils to target position (ANY vil, not just idle)
+    -- 3. Use ConstructionPlacement to find valid position and build
+    --    This handles full building footprint, not just one tile
+    if helpersReady and construction then
+        local buildOk, buildResult = pcall(function()
+            return construction:BuildStructure(typeId, Vector3(x, y, 0), PlacementDirection.SOUTH_WEST, 1, true)
+        end)
+        if buildOk and buildResult then
+            return {
+                action = "place_building_result",
+                success = true,
+                building = resolved,
+                buildable = true,
+                builderCount = 0,
+                method = "construction_helper",
+                x = x, y = y, z = 0,
+                step = 5,
+            }
+        end
+        -- BuildStructure failed — fall through to manual method
+    end
+
+    -- 4. Manual fallback: find vils and use UnitsBuildStructure
     local p = GetAssignedPlayer()
     local allVils = {}
     for _, v in ipairs(p:GetObjectsByClass(UnitClass.VILLAGER)) do
@@ -744,7 +797,7 @@ function cmdPlaceBuilding(msg)
         end
     end
     if #allVils == 0 then
-        return { action = "error", error = "no villagers", step = 3 }
+        return { action = "error", error = "no villagers", step = 4 }
     end
     table.sort(allVils, function(a, b) return a.dist < b.dist end)
     local builders = {}
@@ -752,20 +805,21 @@ function cmdPlaceBuilding(msg)
         table.insert(builders, allVils[i].obj)
     end
 
-    -- 4. Check tile is buildable
-    local tile = GetMapTile(math.floor(x), math.floor(y))
-    local z = 0
-    local buildable = false
-    if tile then
-        z = tile:GetElevation()
-        buildable = tile:IsBuildable()
-    end
-    if not buildable then
-        return { action = "error", error = "tile not buildable at " .. x .. "," .. y, step = 4 }
+    -- 4b. Use FindBestPosition to get a valid spot for the full footprint
+    local finalX, finalY, finalZ = x, y, 0
+    if helpersReady and construction then
+        local findOk, bestPos = pcall(function()
+            return construction:FindBestPosition(typeId, Vector3(x, y, 0), PlacementDirection.SOUTH_WEST, 1, true)
+        end)
+        if findOk and bestPos then
+            finalX = bestPos.x
+            finalY = bestPos.y
+            finalZ = bestPos.z or 0
+        end
     end
 
     -- 5. Place it
-    local ok = UnitsBuildStructure(builders, typeId, Vector3(x, y, z))
+    local ok = UnitsBuildStructure(builders, typeId, Vector3(finalX, finalY, finalZ))
     return {
         action = "place_building_result",
         success = ok,
@@ -847,6 +901,53 @@ function cmdScanAvailable(msg)
     end
 
     return { action = "scan_available", results = results }
+end
+
+function cmdAutoScout(msg)
+    -- Try EnableScouting first (works for standard scout units)
+    local ok = EnableScouting()
+    if ok then
+        return { action = "scout_result", success = true, method = "EnableScouting" }
+    end
+
+    -- Find any scout-class (961) unit and set auto-scout stance
+    local p = GetAssignedPlayer()
+    if not p then
+        return { action = "scout_result", success = false, error = "no player" }
+    end
+
+    local scoutUnits = {}
+    -- Try by specific unit ID if provided
+    if msg and msg.unit_id then
+        local obj = GetObjectById(msg.unit_id)
+        if obj and obj:IsAlive() then
+            table.insert(scoutUnits, obj)
+        end
+    end
+
+    -- Otherwise scan all units for class 961 (cavalry scout line)
+    if #scoutUnits == 0 then
+        pcall(function()
+            local allUnits = p:GetUnits()
+            for _, u in ipairs(allUnits) do
+                if u:IsAlive() and u:GetClass() == 961 then
+                    table.insert(scoutUnits, u)
+                end
+            end
+        end)
+    end
+
+    if #scoutUnits == 0 then
+        return { action = "scout_result", success = false, error = "no scout units found" }
+    end
+
+    local stanceOk = false
+    pcall(function()
+        SetUnitStanceAutoScout(scoutUnits)
+        stanceOk = true
+    end)
+
+    return { action = "scout_result", success = stanceOk, method = "SetUnitStanceAutoScout", count = #scoutUnits }
 end
 
 function resolveBuildingType(name)

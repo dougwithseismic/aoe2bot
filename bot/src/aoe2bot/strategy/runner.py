@@ -135,6 +135,9 @@ class StrategyRunner:
         if first_tick or self.tick_count % _SCAN_AVAILABLE_INTERVAL == 0:
             self._enrich_scan_available()
 
+        if first_tick or self.tick_count % _ENRICH_INTERVAL == 2:
+            self._enrich_livestock()
+
         # -- Idle villagers: every tick (class 904 = actual villagers) --
         self._enrich_idle_vils(raw)
 
@@ -180,6 +183,16 @@ class StrategyRunner:
         try:
             resp = self.ctrl.client.request({"action": "get_units"})
             self._cache["_all_units"] = resp.get("units", [])
+        except Exception:
+            pass
+
+    def _enrich_livestock(self) -> None:
+        try:
+            resp = self.ctrl.client.request({"action": "scan_livestock"})
+            self._cache["_livestock"] = {
+                "owned": resp.get("owned", []),
+                "convertible": resp.get("convertible", []),
+            }
         except Exception:
             pass
 

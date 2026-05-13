@@ -6,7 +6,6 @@ No direct ctrl.* calls for game commands -- only QueuedActions executed by the q
 
 from __future__ import annotations
 
-import math
 import logging
 from typing import TYPE_CHECKING
 
@@ -53,6 +52,7 @@ class FastCastleStrategy(BaseStrategy):
         super().__init__(ctrl)
         self.eco = EcoManager()
         self._tick_count = 0
+        self._scouting_enabled = False
         self._last_logged_action: str | None = None
         self._last_raw: dict = {}
 
@@ -90,8 +90,9 @@ class FastCastleStrategy(BaseStrategy):
         elif w.age >= 2:
             self._castle_age(w, raw_state)
 
-        # -- Scouting --
+        # -- Scouting + Livestock --
         self._eval_scouting(w)
+        self._eval_livestock(w, raw_state)
 
         # Log the current state and what's queued
         queued_name = self._log_tick(w)
@@ -224,6 +225,9 @@ class FastCastleStrategy(BaseStrategy):
         has_tc = w.has_building("TOWN_CENTER", complete_only=False)
         if has_tc:
             return
+        # Also check via spatial layout — TC shows up there via get_town_centers
+        if w.spatial.layout.tc_pos is not None:
+            return
         if not w.commands.can_issue("BUILD", "build_tc"):
             return
         if not w.can_afford(wood=275, stone=100):
@@ -232,12 +236,19 @@ class FastCastleStrategy(BaseStrategy):
             return
 
         ctrl = self.ctrl
-        pos = w.spatial.find_placement("TOWN_CENTER", goal=PlacementGoal.NEAR_TC)
-        if pos is None:
-            pos = w.spatial.layout.base_center
+        # For initial TC, place at villager centroid (known walkable ground)
+        # Spatial engine can't reliably find spots without a TC reference
+        pos = w.spatial.layout.base_center
 
         def build_tc(p=pos) -> dict:
-            resp = ctrl.place_building("TOWN_CENTER_FOUNDATION", p.x, p.y)
+            logger.info("Placing TC at %.1f, %.1f", p.x, p.y)
+            # Try TOWN_CENTER first — resolveBuildingType handles age suffix
+            # and auto-selects FOUNDATION when no TC exists
+            resp = ctrl.place_building("TOWN_CENTER", p.x, p.y)
+            logger.info("TC place response: %s", resp)
+            if resp.get("action") == "error":
+                logger.warning("TC placement FAILED: %s", resp.get("error"))
+                return resp
             w.commands.issue(
                 "BUILD", target_position=p, building_type="TOWN_CENTER",
                 game_time=w.game_time, key="build_tc",
@@ -472,7 +483,7 @@ class FastCastleStrategy(BaseStrategy):
                 pos = w.spatial.find_placement("TOWN_CENTER", goal=PlacementGoal.NEAR_TC)
                 if pos is None:
                     pos = w.spatial.layout.base_center.offset(10, 0)
-                resp = ctrl.place_building("TOWN_CENTER_FOUNDATION", pos.x, pos.y)
+                resp = ctrl.place_building("TOWN_CENTER", pos.x, pos.y)
                 w.commands.issue(
                     "BUILD", target_position=pos, building_type="TOWN_CENTER",
                     game_time=w.game_time, key="build_2nd_tc",
@@ -714,79 +725,68 @@ class FastCastleStrategy(BaseStrategy):
     # ================================================================
 
     def _eval_scouting(self, w: WorldState) -> None:
-        """Scout around base using an expanding circle sequence."""
-        if w.queue.has_active("scout_base"):
+        """Enable auto-scouting — finds scout unit and sets auto-scout stance."""
+        if self._scouting_enabled:
+            return
+        if w.queue.has_active("enable_scout"):
             return
 
-        # Only queue once during the first ~10 ticks
-        if self._tick_count > 10:
-            return
-
-        base = w.spatial.layout.base_center
         ctrl = self.ctrl
 
-        # Find scout unit (class 961)
+        # Find a scout-class unit (class 961) from UnitTracker
         scout_id: int | None = None
         for u in w.units.get_all():
             if u.is_scout:
                 scout_id = u.id
                 break
 
-        if scout_id is None:
+        def enable_scout(sid=scout_id) -> dict:
+            msg: dict = {"action": "scout"}
+            if sid is not None:
+                msg["unit_id"] = sid
+            resp = ctrl.client.request(msg)
+            if resp.get("success"):
+                self._scouting_enabled = True
+            return resp
+
+        w.queue.add_action(QueuedAction(
+            name="enable_scout",
+            priority=Priority.HIGH,
+            execute=enable_scout,
+        ))
+
+    def _eval_livestock(self, w: WorldState, raw_state: dict) -> None:
+        """Send owned livestock (sheep/goats) to TC for food."""
+        if not w.tc_is_complete():
+            return
+        if w.queue.has_active("herd_livestock"):
             return
 
-        # Generate waypoints in expanding circles, biased toward unexplored
-        steps: list[QueuedAction | WaitCondition] = []
-        sid = scout_id
+        livestock = raw_state.get("_livestock", {})
+        owned = livestock.get("owned", [])
+        if not owned:
+            return
 
-        for radius in (15, 25, 35):
-            # Check for the most unexplored direction first
-            unexplored_dir = w.map.get_unexplored_direction(base)
-            if unexplored_dir is not None:
-                start_angle = math.atan2(unexplored_dir.y, unexplored_dir.x)
-            else:
-                start_angle = 0.0
+        tc_pos = w.spatial.layout.tc_pos
+        if tc_pos is None:
+            return
 
-            for i in range(8):
-                angle = start_angle + (i * math.pi / 4)
-                tx = base.x + radius * math.cos(angle)
-                ty = base.y + radius * math.sin(angle)
-                target = Position(tx, ty)
+        # Find livestock NOT already near TC (distance > 5)
+        far_livestock = [
+            obj for obj in owned
+            if Position(obj["x"], obj["y"]).distance_to(tc_pos) > 5.0
+        ]
+        if not far_livestock:
+            return
 
-                def make_move(t=target, s=sid):
-                    def execute() -> dict:
-                        resp = ctrl.move_units([s], t.x, t.y)
-                        w.commands.issue(
-                            "MOVE", unit_ids=[s], target_position=t,
-                            game_time=w.game_time, key=f"scout_{t}",
-                        )
-                        return resp
-                    return execute
+        ctrl = self.ctrl
+        ids = [obj["id"] for obj in far_livestock[:4]]
 
-                steps.append(QueuedAction(
-                    name=f"scout_move_{target}",
-                    priority=Priority.HIGH,
-                    execute=make_move(),
-                ))
+        def herd() -> dict:
+            return ctrl.move_units(ids, tc_pos.x, tc_pos.y)
 
-                def make_check(t=target, s=sid):
-                    def check() -> bool:
-                        unit = w.units.get_unit(s)
-                        if unit is None:
-                            return True  # scout died, skip
-                        return unit.position.distance_to(t) <= 5.0
-                    return check
-
-                steps.append(WaitCondition(
-                    name=f"wait_scout_near_{target}",
-                    check=make_check(),
-                    timeout=15.0,
-                    on_timeout="skip",
-                ))
-
-        if steps:
-            w.queue.add_sequence(ActionSequence(
-                name="scout_base",
-                priority=Priority.HIGH,
-                steps=steps,
-            ))
+        w.queue.add_action(QueuedAction(
+            name="herd_livestock",
+            priority=Priority.HIGH,
+            execute=herd,
+        ))
