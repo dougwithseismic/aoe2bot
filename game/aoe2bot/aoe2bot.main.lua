@@ -43,12 +43,13 @@ function Init()
 
     local ok, err = pcall(function()
         resourceTracker = ResourceTracker:new()
-        vilOccupation = VillagerOccupation:new(resourceTracker)
-        construction = ConstructionPlacement:new(vilOccupation)
+        -- Skip VillagerOccupation — it auto-assigns all vils on creation,
+        -- sending livestock running across the map on Nomad starts
+        construction = ConstructionPlacement:new()
         helpersReady = true
     end)
     if ok then
-        Log("[AoE2Bot] Helpers initialized (ResourceTracker, VillagerOccupation, ConstructionPlacement)")
+        Log("[AoE2Bot] Helpers initialized (ResourceTracker, ConstructionPlacement)")
     else
         Log("[AoE2Bot] WARNING: Helper init failed: " .. tostring(err))
         helpersReady = false

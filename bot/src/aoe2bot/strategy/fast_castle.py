@@ -347,6 +347,9 @@ class FastCastleStrategy(BaseStrategy):
     def _do_livestock(self, w: WorldState, raw: dict, acts: list[str]) -> None:
         if not w.tc_is_complete():
             return
+        # Wait until TC has been up for a bit — don't send cows running at game start
+        if w.villager_count < 8:
+            return
         tc = self._tc(w)
         owned = raw.get("_livestock", {}).get("owned", [])
         far = [o for o in owned if Position(o["x"], o["y"]).distance_to(tc) > 8.0]
