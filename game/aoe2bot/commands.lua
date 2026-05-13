@@ -185,9 +185,16 @@ function commands.cmdPlaceBuilding(msg)
         for dx = -half, half - 1 do
             for dy = -half, half - 1 do
                 local tile = GetMapTile(math.floor(cx) + dx, math.floor(cy) + dy)
-                if not tile or not tile:IsBuildable() then
+                if not tile then return false end
+                -- IsBuildable checks flat terrain, IsWalkable catches trees/obstacles
+                local buildable = false
+                local walkable = false
+                pcall(function() buildable = tile:IsBuildable() end)
+                pcall(function() walkable = tile:IsWalkable() end)
+                if not buildable or not walkable then
                     return false
                 end
+                -- Double-check for visible objects (resources, buildings)
                 local objCount = 0
                 pcall(function() objCount = tile:GetObjectCount() end)
                 if objCount > 0 then

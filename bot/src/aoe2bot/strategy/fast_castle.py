@@ -230,10 +230,10 @@ class FastCastleStrategy(BaseStrategy):
         best = max(near, key=lambda t: (t["x"] - tc.x) * safe.x + (t["y"] - tc.y) * safe.y)
         tx, ty = best["x"], best["y"]
 
-        # Place LC 2 tiles from trees toward TC
+        # Place LC 4 tiles from trees toward TC (2 was too close — still in treeline)
         dx, dy = tc.x - tx, tc.y - ty
         d = max((dx*dx + dy*dy) ** 0.5, 0.1)
-        lx, ly = tx + dx / d * 2, ty + dy / d * 2
+        lx, ly = tx + dx / d * 4, ty + dy / d * 4
 
         if self._ok(self._place("LUMBER_CAMP", lx, ly)):
             self._built.add("lumber_camp")
