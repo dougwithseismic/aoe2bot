@@ -43,10 +43,14 @@ end
 local function ensure_houses()
     if state.house_cd > 0 then return false end
     local pop = h.pop()
-    if pop.headroom > 3 then return false end
+    if pop.headroom > 2 then return false end
     if not h.can_afford(0, 25, 0, 0) then return false end
     local ok = h.build_near_tc("HOUSE_DARK_AGE", 2, -4, 4)
-    if ok then state.house_cd = 10 end
+    if ok then
+        state.house_cd = 50
+    else
+        state.house_cd = 10
+    end
     return ok
 end
 

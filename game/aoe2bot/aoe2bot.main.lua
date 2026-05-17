@@ -11,21 +11,17 @@ function Load(playerId)
     Settings.AddBool("Show Overlay", true)
     Settings.AddBool("Run Build Order", true)
 
-    if IsMenuOpen() then
-        local options = GetCurrentGameOptions()
-        if options then
-            pcall(function() options:SetAIDifficulty(OptionsAIDifficulty.HARD) end)
-            pcall(function() options:SetLocation(OptionsLocation.ARABIA) end)
-            pcall(function() options:SetMapSize(OptionsMapSize.TINY) end)
-            pcall(function() options:SetPopulation(200) end)
-            pcall(function() options:SetStartingAge(OptionsAge.DARK_AGE) end)
-            pcall(function() options:SetGameSpeed(1.5) end)
-            pcall(function() options:SetPlayersCount(2) end)
-            DispatchStartGame()
-            Log(TAG .. " Game dispatched")
-        end
-    else
-        Log(TAG .. " Already in game, skipping auto-start")
+    local options = GetCurrentGameOptions()
+    if options then
+        pcall(function() options:SetAIDifficulty(OptionsAIDifficulty.HARD) end)
+        pcall(function() options:SetLocation(OptionsLocation.ARABIA) end)
+        pcall(function() options:SetMapSize(OptionsMapSize.TINY) end)
+        pcall(function() options:SetPopulation(200) end)
+        pcall(function() options:SetStartingAge(OptionsAge.DARK_AGE) end)
+        pcall(function() options:SetGameSpeed(1.5) end)
+        pcall(function() options:SetPlayersCount(2) end)
+        local ok = DispatchStartGame()
+        if ok then Log(TAG .. " Game dispatched") else Log(TAG .. " DispatchStartGame false (already in game?)") end
     end
 end
 
@@ -44,6 +40,7 @@ end
 
 function Update()
     if rt then pcall(function() rt:Update() end) end
+    h.update_construction()
     if Settings.GetBool("Run Build Order", true) then
         local ok, err = pcall(function() build_order.update(rt) end)
         if not ok then Log(TAG .. " ERR: " .. tostring(err)) end

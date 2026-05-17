@@ -296,6 +296,11 @@ function helpers.get_construction()
     return construction
 end
 
+function helpers.update_construction()
+    if vilOccupation then pcall(function() vilOccupation:Update() end) end
+    if construction then pcall(function() construction:Update() end) end
+end
+
 -- ══ Commands ══
 
 function helpers.train_vil()
@@ -329,8 +334,18 @@ function helpers.build(building_key, pos, builders)
 end
 
 function helpers.build_near_tc(building_key, size, ox, oy)
-    if not construction then return false end
+    if not construction then
+        Log("[helpers] no construction helper")
+        return false
+    end
+    -- Try primary key, then fallback without age suffix
     local typeId = UnitObjectType[building_key]
+    if not typeId then
+        local base = string.gsub(building_key, "_DARK_AGE", "")
+        base = string.gsub(base, "_FEUDAL_AGE", "")
+        base = string.gsub(base, "_CASTLE_AGE", "")
+        typeId = UnitObjectType[base]
+    end
     if not typeId then
         Log("[helpers] " .. building_key .. " not found in UnitObjectType")
         return false
@@ -355,12 +370,11 @@ function helpers.move(units, pos)
     return helpers.get("move", function() return UnitsMove(units, pos) end, false)
 end
 
-function helpers.auto_scout(scout_unit)
-    -- Circle scout: waypoints around base starting from map-edge side
+function helpers.auto_scout()
     return helpers.get("auto_scout", function()
         local p = GetAssignedPlayer()
+        -- Find any non-vil, non-building, non-livestock unit
         local scout = nil
-        -- Find any alive military-ish unit (scout cavalry, champion scout, etc.)
         for _, u in ipairs(p:GetPlayerObjects()) do
             if u:IsAlive() then
                 local cls = u:GetClass()
@@ -371,27 +385,8 @@ function helpers.auto_scout(scout_unit)
             end
         end
         if not scout then return false end
-
-        local tc = helpers.tc_pos()
-        if not tc then return false end
-
-        local mapW, mapH = GetMapWidth(), GetMapHeight()
-        local safeAngle = math.atan2(tc.y - mapH / 2, tc.x - mapW / 2)
-
-        local waypoints = {}
-        local radius = 20
-        for i = 0, 7 do
-            local angle = safeAngle + (i / 8) * 2 * math.pi
-            table.insert(waypoints, Vector2(tc.x + radius * math.cos(angle), tc.y + radius * math.sin(angle)))
-        end
-
-        -- Send to first waypoint, then queue the rest
-        UnitsMove({scout}, waypoints[1])
-        for i = 2, #waypoints do
-            UnitsMove({scout}, waypoints[i])
-        end
-
-        event_log.add("scout circle (" .. #waypoints .. " waypoints)")
+        SetUnitStanceAutoScout({scout})
+        event_log.add("auto-scout enabled")
         return true
     end, false)
 end
