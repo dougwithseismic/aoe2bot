@@ -12,7 +12,6 @@ function Load(playerId)
 
     Settings.AddBool("Auto Start Game", true)
     Settings.AddBool("Show Overlay", true)
-    Settings.AddBool("Show Event Log", true)
     Settings.AddDropdown("Difficulty", "Hard", { "Easiest", "Standard", "Moderate", "Hard", "Hardest", "Extreme" })
     Settings.AddDropdown("Map", "Arabia", { "Arabia", "Arena", "Black Forest", "Nomad", "Islands" })
     Settings.AddInt("Population Limit", 200, 25, 500)
@@ -22,6 +21,23 @@ function Load(playerId)
     end
 end
 
+local DIFFICULTY_MAP = {
+    Easiest = OptionsAIDifficulty.EASIEST,
+    Standard = OptionsAIDifficulty.STANDARD,
+    Moderate = OptionsAIDifficulty.MODERATE,
+    Hard = OptionsAIDifficulty.HARD,
+    Hardest = OptionsAIDifficulty.HARDEST,
+    Extreme = OptionsAIDifficulty.EXTREME,
+}
+
+local LOCATION_MAP = {
+    Arabia = OptionsLocation.ARABIA,
+    Arena = OptionsLocation.ARENA,
+    ["Black Forest"] = OptionsLocation.BLACK_FOREST,
+    Nomad = OptionsLocation.NOMAD,
+    Islands = OptionsLocation.ISLANDS,
+}
+
 function configureAndStart()
     local options = GetCurrentGameOptions()
     if not options then
@@ -29,10 +45,14 @@ function configureAndStart()
         return
     end
 
-    options:SetAIDifficulty(OptionsAIDifficulty.HARD)
-    options:SetLocation(OptionsLocation.ARABIA)
+    local diff = Settings.GetString("Difficulty", "Hard")
+    local map = Settings.GetString("Map", "Arabia")
+    local pop = Settings.GetInt("Population Limit", 200)
+
+    options:SetAIDifficulty(DIFFICULTY_MAP[diff] or OptionsAIDifficulty.HARD)
+    options:SetLocation(LOCATION_MAP[map] or OptionsLocation.ARABIA)
     options:SetMapSize(OptionsMapSize.TINY)
-    options:SetPopulation(200)
+    options:SetPopulation(pop)
     options:SetStartingAge(OptionsAge.DARK_AGE)
     options:SetGameSpeed(1.5)
     options:SetPlayersCount(2)

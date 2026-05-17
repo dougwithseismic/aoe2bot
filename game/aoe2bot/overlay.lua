@@ -18,6 +18,22 @@ local COL_LOG_TEXT = Color(200, 200, 200, 255)
 
 local AGE_NAMES = { [0] = "Dark", [1] = "Feudal", [2] = "Castle", [3] = "Imperial" }
 
+local STATE_X = PANEL_PADDING
+local STATE_Y = PANEL_PADDING + 40
+local STATE_W = 220
+local STATE_H = PANEL_PADDING * 2 + LINE_HEIGHT * 8
+local STATE_TX = STATE_X + PANEL_PADDING
+local STATE_TL = Vector2(STATE_X, STATE_Y)
+local STATE_BR = Vector2(STATE_X + STATE_W, STATE_Y + STATE_H)
+
+local pos = Vector2(0, 0)
+
+local function setPos(x, y)
+    pos.x = x
+    pos.y = y
+    return pos
+end
+
 function overlay.render()
     local screen = GetScreenSize()
     if not screen then return end
@@ -27,34 +43,28 @@ function overlay.render()
 end
 
 function overlay.render_state_panel(screen)
-    local x = PANEL_PADDING
-    local y = PANEL_PADDING + 40
-    local w = 220
-    local lines = 8
-    local h = PANEL_PADDING * 2 + LINE_HEIGHT * lines
+    RenderRectFilled(STATE_TL, STATE_BR, COL_BG, 4, 15)
 
-    RenderRectFilled(Vector2(x, y), Vector2(x + w, y + h), COL_BG, 4, 15)
+    local cy = STATE_Y + PANEL_PADDING
 
-    local cy = y + PANEL_PADDING
-    local tx = x + PANEL_PADDING
-
-    RenderText("GAME STATE", Vector2(tx, cy), FONT_SIZE, COL_HEADER, false, true)
+    RenderText("GAME STATE", setPos(STATE_TX, cy), FONT_SIZE, COL_HEADER, false, true)
     cy = cy + LINE_HEIGHT + 4
 
     local time = GetGameTime() or 0
     local mins = math.floor(time / 60)
     local secs = math.floor(time % 60)
-    RenderText(string.format("Time: %02d:%02d", mins, secs), Vector2(tx, cy), FONT_SIZE, COL_TEXT, false, false)
+    RenderText(string.format("Time: %02d:%02d", mins, secs), setPos(STATE_TX, cy), FONT_SIZE, COL_TEXT, false, false)
     cy = cy + LINE_HEIGHT
 
-    local age = GetFact(Fact.CURRENT_AGE) or GetAttribute(PlayerAttribute.AGE) or 0
+    local age = GetFact(Fact.CURRENT_AGE)
+    if age == nil then age = 0 end
     local ageName = AGE_NAMES[age] or ("Age " .. tostring(age))
-    RenderText("Age: " .. ageName, Vector2(tx, cy), FONT_SIZE, COL_TEXT, false, false)
+    RenderText("Age: " .. ageName, setPos(STATE_TX, cy), FONT_SIZE, COL_TEXT, false, false)
     cy = cy + LINE_HEIGHT
 
     local pop = GetFact(Fact.POPULATION) or 0
     local popCap = GetFact(Fact.POPULATION_CAP) or 0
-    RenderText(string.format("Pop: %d / %d", pop, popCap), Vector2(tx, cy), FONT_SIZE, COL_TEXT, false, false)
+    RenderText(string.format("Pop: %d / %d", pop, popCap), setPos(STATE_TX, cy), FONT_SIZE, COL_TEXT, false, false)
     cy = cy + LINE_HEIGHT + 4
 
     local food = GetFact(Fact.FOOD_AMOUNT) or 0
@@ -62,37 +72,38 @@ function overlay.render_state_panel(screen)
     local gold = GetFact(Fact.GOLD_AMOUNT) or 0
     local stone = GetFact(Fact.STONE_AMOUNT) or 0
 
-    RenderText(string.format("Food:  %d", math.floor(food)), Vector2(tx, cy), FONT_SIZE, COL_FOOD, false, false)
+    RenderText(string.format("Food:  %d", math.floor(food)), setPos(STATE_TX, cy), FONT_SIZE, COL_FOOD, false, false)
     cy = cy + LINE_HEIGHT
-    RenderText(string.format("Wood:  %d", math.floor(wood)), Vector2(tx, cy), FONT_SIZE, COL_WOOD, false, false)
+    RenderText(string.format("Wood:  %d", math.floor(wood)), setPos(STATE_TX, cy), FONT_SIZE, COL_WOOD, false, false)
     cy = cy + LINE_HEIGHT
-    RenderText(string.format("Gold:  %d", math.floor(gold)), Vector2(tx, cy), FONT_SIZE, COL_GOLD, false, false)
+    RenderText(string.format("Gold:  %d", math.floor(gold)), setPos(STATE_TX, cy), FONT_SIZE, COL_GOLD, false, false)
     cy = cy + LINE_HEIGHT
-    RenderText(string.format("Stone: %d", math.floor(stone)), Vector2(tx, cy), FONT_SIZE, COL_STONE, false, false)
+    RenderText(string.format("Stone: %d", math.floor(stone)), setPos(STATE_TX, cy), FONT_SIZE, COL_STONE, false, false)
 end
+
+local LOG_MAX_SHOW = 12
+local LOG_W = 420
+local LOG_Y = PANEL_PADDING + 40
 
 function overlay.render_event_log(screen)
     local entries = event_log.get_entries()
     if #entries == 0 then return end
 
-    local maxShow = 12
-    local w = 420
-    local h = PANEL_PADDING * 2 + LINE_HEIGHT * math.min(#entries, maxShow) + LINE_HEIGHT + 4
-    local x = screen.x - w - PANEL_PADDING
-    local y = PANEL_PADDING + 40
-
-    RenderRectFilled(Vector2(x, y), Vector2(x + w, y + h), COL_LOG_BG, 4, 15)
-
-    local cy = y + PANEL_PADDING
+    local count = math.min(#entries, LOG_MAX_SHOW)
+    local h = PANEL_PADDING * 2 + LINE_HEIGHT * count + LINE_HEIGHT + 4
+    local x = screen.x - LOG_W - PANEL_PADDING
     local tx = x + PANEL_PADDING
 
-    RenderText("EVENT LOG", Vector2(tx, cy), FONT_SIZE, COL_HEADER, false, true)
+    RenderRectFilled(setPos(x, LOG_Y), Vector2(x + LOG_W, LOG_Y + h), COL_LOG_BG, 4, 15)
+
+    local cy = LOG_Y + PANEL_PADDING
+    RenderText("EVENT LOG", setPos(tx, cy), FONT_SIZE, COL_HEADER, false, true)
     cy = cy + LINE_HEIGHT + 4
 
-    for i = 1, math.min(#entries, maxShow) do
+    for i = 1, count do
         local entry = entries[i]
-        RenderText(entry.time, Vector2(tx, cy), FONT_SIZE, COL_LOG_TIME, false, false)
-        RenderText(entry.text, Vector2(tx + 50, cy), FONT_SIZE, COL_LOG_TEXT, false, false)
+        RenderText(entry.time, setPos(tx, cy), FONT_SIZE, COL_LOG_TIME, false, false)
+        RenderText(entry.text, setPos(tx + 50, cy), FONT_SIZE, COL_LOG_TEXT, false, false)
         cy = cy + LINE_HEIGHT
     end
 end
