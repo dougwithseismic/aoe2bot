@@ -1,9 +1,7 @@
 -- 22-Pop Scout Rush Build Order
 -- Priority-based: critical actions always run first, then build order steps.
 
-local query = require("helpers.query")
-local spatial = require("helpers.spatial")
-local command = require("helpers.command")
+local h = require("helpers")
 local event_log = require("event_log")
 
 local bo = {}
@@ -44,72 +42,72 @@ end
 
 local function ensure_houses()
     if state.house_cd > 0 then return false end
-    local pop = query.pop()
+    local pop = h.pop()
     if pop.headroom > 3 then return false end
-    if not query.can_afford(0, 25, 0, 0) then return false end
-    local ok = command.build_near_tc("HOUSE_DARK_AGE", 2, -4, 4)
+    if not h.can_afford(0, 25, 0, 0) then return false end
+    local ok = h.build_near_tc("HOUSE_DARK_AGE", 2, -4, 4)
     if ok then state.house_cd = 10 end
     return ok
 end
 
 local function ensure_training()
-    local pop = query.pop()
+    local pop = h.pop()
     if pop.headroom <= 0 then return false end
-    if not query.can_afford(50, 0, 0, 0) then return false end
-    local tcs = query.tcs()
+    if not h.can_afford(50, 0, 0, 0) then return false end
+    local tcs = h.tcs()
     if #tcs == 0 then return false end
     local ok, idle = pcall(function() return tcs[1]:IsIdle() end)
     if not ok or not idle then return false end
-    return command.train_vil()
+    return h.train_vil()
 end
 
 local function ensure_scouting()
     if state.scouting then return false end
-    local scout = query.scout()
+    local scout = h.scout()
     if not scout then return false end
     state.scouting = true
-    return command.auto_scout(scout)
+    return h.auto_scout(scout)
 end
 
 -- ── Resource Helpers ──
 
 local function refresh_wood_target()
-    local tc = query.tc_pos()
+    local tc = h.tc_pos()
     if not tc or not rt then return end
     if state.wood_target then
         local ok, alive = pcall(function() return state.wood_target:IsAlive() end)
         if ok and alive then return end
     end
-    state.wood_target = spatial.find_safe_trees(rt, tc)
+    state.wood_target = h.find_safe_trees(rt, tc)
 end
 
 local function assign_to_food(vils)
-    local tc = query.tc_pos()
+    local tc = h.tc_pos()
     if not tc then return false end
-    local food = spatial.find_food(rt, tc)
+    local food = h.find_food(rt, tc)
     if not food then return false end
-    return command.gather(vils, food)
+    return h.gather(vils, food)
 end
 
 local function assign_to_wood(vils)
     refresh_wood_target()
     if not state.wood_target then return false end
-    return command.gather(vils, state.wood_target)
+    return h.gather(vils, state.wood_target)
 end
 
 local function assign_to_gold(vils)
-    local tc = query.tc_pos()
+    local tc = h.tc_pos()
     if not tc then return false end
-    local gold = spatial.find_gold(rt, tc)
+    local gold = h.find_gold(rt, tc)
     if not gold then return false end
-    return command.gather(vils, gold)
+    return h.gather(vils, gold)
 end
 
 -- ── Build Order Steps ──
 
 local function force_initial_food()
     if state.food_forced then return false end
-    local vils = query.vils()
+    local vils = h.vils()
     if #vils == 0 then return false end
     local ok = assign_to_food(vils)
     if ok then
@@ -120,9 +118,9 @@ local function force_initial_food()
 end
 
 local function assign_idle_by_count()
-    local idle = query.idle_vils()
+    local idle = h.idle_vils()
     if #idle == 0 then return false end
-    local pop = query.pop()
+    local pop = h.pop()
     local n = pop.vils
 
     -- 22-pop scout rush distribution:
@@ -141,7 +139,7 @@ local function assign_idle_by_count()
     elseif n <= 21 then
         return assign_to_wood(idle)
     else
-        local r = query.resources()
+        local r = h.resources()
         if r.food < 200 then
             return assign_to_food(idle)
         else
@@ -152,14 +150,14 @@ end
 
 local function build_lumber_camp()
     if state.built.lc then return false end
-    local pop = query.pop()
+    local pop = h.pop()
     if pop.vils < 7 then return false end
-    if not query.can_afford(0, 100, 0, 0) then return false end
+    if not h.can_afford(0, 100, 0, 0) then return false end
 
     refresh_wood_target()
     if not state.wood_target then return false end
 
-    local tc = query.tc_pos()
+    local tc = h.tc_pos()
     if not tc then return false end
 
     local ok, wpos = pcall(function() return state.wood_target:GetPosition() end)
@@ -167,14 +165,14 @@ local function build_lumber_camp()
 
     local dx, dy = tc.x - wpos.x, tc.y - wpos.y
     local d = math.max(math.sqrt(dx * dx + dy * dy), 0.1)
-    local spot = spatial.find_placement(
+    local spot = h.find_placement(
         math.floor(wpos.x + dx / d * 3),
         math.floor(wpos.y + dy / d * 3),
         2
     )
     if not spot then return false end
 
-    local built = command.build("LUMBER_CAMP_DARK_AGE", spot)
+    local built = h.build("LUMBER_CAMP_DARK_AGE", spot)
     if built then state.built.lc = true end
     return built
 end
@@ -182,17 +180,17 @@ end
 local function build_mill()
     if state.built.mill then return false end
     if not state.built.lc then return false end
-    local pop = query.pop()
+    local pop = h.pop()
     if pop.vils < 10 then return false end
-    if not query.can_afford(0, 100, 0, 0) then return false end
+    if not h.can_afford(0, 100, 0, 0) then return false end
 
-    local tc = query.tc_pos()
+    local tc = h.tc_pos()
     if not tc or not rt then return false end
 
     local ok, result = pcall(function()
         local forage = rt:GetForage()
         if forage and #forage > 0 then
-            local best, d = spatial.nearest(forage, tc)
+            local best, d = h.nearest(forage, tc)
             if best and d < 20 then
                 local fp = best:GetPosition()
                 local dx, dy = tc.x - fp.x, tc.y - fp.y
@@ -204,24 +202,24 @@ local function build_mill()
     end)
     if not ok then return false end
 
-    local spot = spatial.find_placement(math.floor(result.x), math.floor(result.y), 2)
+    local spot = h.find_placement(math.floor(result.x), math.floor(result.y), 2)
     if not spot then return false end
 
-    local built = command.build("MILL_DARK_AGE", spot)
+    local built = h.build("MILL_DARK_AGE", spot)
     if built then state.built.mill = true end
     return built
 end
 
 local function build_mining_camp()
     if state.built.mc then return false end
-    local pop = query.pop()
+    local pop = h.pop()
     if pop.vils < 20 then return false end
-    if not query.can_afford(0, 100, 0, 0) then return false end
+    if not h.can_afford(0, 100, 0, 0) then return false end
 
-    local tc = query.tc_pos()
+    local tc = h.tc_pos()
     if not tc then return false end
 
-    local gold, d = spatial.find_gold(rt, tc)
+    local gold, d = h.find_gold(rt, tc)
     if not gold or d > 30 then return false end
 
     local ok, gp = pcall(function() return gold:GetPosition() end)
@@ -229,28 +227,28 @@ local function build_mining_camp()
 
     local dx, dy = tc.x - gp.x, tc.y - gp.y
     local dd = math.max(math.sqrt(dx * dx + dy * dy), 0.1)
-    local spot = spatial.find_placement(
+    local spot = h.find_placement(
         math.floor(gp.x + dx / dd * 3),
         math.floor(gp.y + dy / dd * 3),
         2
     )
     if not spot then return false end
 
-    local built = command.build("MINING_CAMP_DARK_AGE", spot)
+    local built = h.build("MINING_CAMP_DARK_AGE", spot)
     if built then state.built.mc = true end
     return built
 end
 
 local function research_loom()
     if state.loom_done then return false end
-    local pop = query.pop()
+    local pop = h.pop()
     if pop.vils < 20 then return false end
-    if not query.can_afford(0, 0, 50, 0) then return false end
-    if query.is_researched(TECH_LOOM) then
+    if not h.can_afford(0, 0, 50, 0) then return false end
+    if h.is_researched(TECH_LOOM) then
         state.loom_done = true
         return false
     end
-    local ok = command.research(TECH_LOOM, "Loom")
+    local ok = h.research(TECH_LOOM, "Loom")
     if ok then state.loom_done = true end
     return ok
 end
@@ -258,32 +256,32 @@ end
 local function click_feudal()
     if state.feudal_clicked then return false end
     if not state.loom_done then return false end
-    if not query.can_afford(500, 0, 0, 0) then return false end
-    if not query.can_research(TECH_FEUDAL) then return false end
+    if not h.can_afford(500, 0, 0, 0) then return false end
+    if not h.can_research(TECH_FEUDAL) then return false end
 
-    local dark_buildings = #query.buildings("LUMBER") + #query.buildings("MILL")
-        + #query.buildings("MINING") + #query.buildings("BARRACKS")
+    local dark_buildings = #h.buildings("LUMBER") + #h.buildings("MILL")
+        + #h.buildings("MINING") + #h.buildings("BARRACKS")
     if dark_buildings < 2 then return false end
 
-    local ok = command.research(TECH_FEUDAL, "Feudal Age")
+    local ok = h.research(TECH_FEUDAL, "Feudal Age")
     if ok then state.feudal_clicked = true end
     return ok
 end
 
 local function feudal_upgrades()
-    if query.age() < 1 then return false end
-    if not query.is_researched(TECH_DOUBLE_BIT_AXE) and query.can_research(TECH_DOUBLE_BIT_AXE) then
-        return command.research(TECH_DOUBLE_BIT_AXE, "Double-Bit Axe")
+    if h.age() < 1 then return false end
+    if not h.is_researched(TECH_DOUBLE_BIT_AXE) and h.can_research(TECH_DOUBLE_BIT_AXE) then
+        return h.research(TECH_DOUBLE_BIT_AXE, "Double-Bit Axe")
     end
-    if not query.is_researched(TECH_HORSE_COLLAR) and query.can_research(TECH_HORSE_COLLAR) then
-        return command.research(TECH_HORSE_COLLAR, "Horse Collar")
+    if not h.is_researched(TECH_HORSE_COLLAR) and h.can_research(TECH_HORSE_COLLAR) then
+        return h.research(TECH_HORSE_COLLAR, "Horse Collar")
     end
     return false
 end
 
 local function herd_livestock()
     if not rt then return false end
-    local tc = query.tc_pos()
+    local tc = h.tc_pos()
     if not tc then return false end
 
     local ok, result = pcall(function()
@@ -291,7 +289,7 @@ local function herd_livestock()
         if not owned then return false end
         local far = {}
         for _, o in ipairs(owned) do
-            if spatial.dist(o:GetPosition(), tc) > 8 then
+            if h.dist(o:GetPosition(), tc) > 8 then
                 table.insert(far, o)
             end
         end
@@ -311,31 +309,55 @@ function bo.update(resource_tracker)
     state.tick = state.tick + 1
     if state.house_cd > 0 then state.house_cd = state.house_cd - 1 end
 
-    -- Priority 1: Critical (every tick)
-    ensure_scouting()
-    if ensure_houses() then return end
-    if ensure_training() then return end
-
-    -- Priority 2: Initial setup
-    if not state.food_forced then
-        if force_initial_food() then return end
+    -- DEBUG: test one function at a time. Uncomment to find the crasher.
+    if state.tick == 3 then
+        Log("[BO] tick 3: testing h.pop()")
+        local pop = h.pop()
+        Log("[BO] pop: " .. tostring(pop.current) .. "/" .. tostring(pop.housing) .. " vils=" .. tostring(pop.vils))
     end
 
-    -- Priority 3: Eco buildings (when conditions met)
-    if build_lumber_camp() then return end
-    if build_mill() then return end
-    if build_mining_camp() then return end
+    if state.tick == 5 then
+        Log("[BO] tick 5: testing h.tcs()")
+        local tcs = h.tcs()
+        Log("[BO] tcs: " .. tostring(#tcs))
+    end
 
-    -- Priority 4: Assign idle vils
-    if assign_idle_by_count() then return end
+    if state.tick == 7 then
+        Log("[BO] tick 7: testing h.vils()")
+        local vils = h.vils()
+        Log("[BO] vils: " .. tostring(#vils))
+    end
 
-    -- Priority 5: Age progression
-    if research_loom() then return end
-    if click_feudal() then return end
-    if feudal_upgrades() then return end
+    if state.tick == 9 then
+        Log("[BO] tick 9: testing h.scout()")
+        local scout = h.scout()
+        Log("[BO] scout: " .. tostring(scout))
+    end
 
-    -- Priority 6: Maintenance
-    if state.tick % 5 == 0 then herd_livestock() end
+    if state.tick == 11 then
+        Log("[BO] tick 11: testing h.idle_vils()")
+        local idle = h.idle_vils()
+        Log("[BO] idle: " .. tostring(#idle))
+    end
+
+    if state.tick == 13 then
+        Log("[BO] tick 13: testing h.find_food()")
+        local tc = h.tc_pos()
+        if tc then
+            local food = h.find_food(rt, tc)
+            Log("[BO] food: " .. tostring(food))
+        end
+    end
+
+    if state.tick == 15 then
+        Log("[BO] tick 15: testing h.train_vil()")
+        h.train_vil()
+    end
+
+    if state.tick == 17 then
+        Log("[BO] tick 17: testing ensure_scouting")
+        ensure_scouting()
+    end
 end
 
 return bo
