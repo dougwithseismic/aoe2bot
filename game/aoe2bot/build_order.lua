@@ -32,6 +32,7 @@ function bo.init(resource_tracker)
         wood_target = nil,
         built = {},
         house_cd = 0,
+        houses_ordered = 0,
         food_forced = false,
         feudal_clicked = false,
         loom_done = false,
@@ -43,10 +44,13 @@ end
 local function ensure_houses()
     if state.house_cd > 0 then return false end
     local pop = h.pop()
-    if pop.headroom > 2 then return false end
+    -- Account for houses we've already ordered but aren't built yet
+    local effective_headroom = pop.headroom + (state.houses_ordered * 5)
+    if effective_headroom > 4 then return false end
     if not h.can_afford(0, 25, 0, 0) then return false end
     local ok = h.build_near_tc("HOUSE_DARK_AGE", 2, -4, 4)
     if ok then
+        state.houses_ordered = (state.houses_ordered or 0) + 1
         state.house_cd = 50
     else
         state.house_cd = 10
@@ -109,12 +113,13 @@ end
 
 local function force_initial_food()
     if state.food_forced then return false end
-    local vils = h.vils()
-    if #vils == 0 then return false end
-    local ok = assign_to_food(vils)
+    if state.tick > 10 then state.food_forced = true; return false end
+    local idle = h.idle_vils()
+    if #idle == 0 then state.food_forced = true; return false end
+    local ok = assign_to_food(idle)
     if ok then
         state.food_forced = true
-        event_log.add("all vils → food (" .. #vils .. " vils)")
+        event_log.add("idle vils → food (" .. #idle .. " vils)")
     end
     return ok
 end
