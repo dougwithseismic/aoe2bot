@@ -320,12 +320,18 @@ function helpers.build(building_key, pos, builders)
     if not construction then return false end
     local typeId = UnitObjectType[building_key]
     if not typeId then
-        Log("[helpers] " .. building_key .. " not found in UnitObjectType")
+        -- Try without age suffix
+        local base = string.gsub(building_key, "_DARK_AGE", "")
+        base = string.gsub(base, "_FEUDAL_AGE", "")
+        typeId = UnitObjectType[base]
+    end
+    if not typeId then
+        Log("[helpers] " .. building_key .. " not found")
         return false
     end
     if not pos then return false end
     local result = helpers.get("build:" .. building_key, function()
-        return construction:BuildStructure(typeId, pos, 0, 1)
+        return construction:BuildStructureAtTown(typeId, pos, 1)
     end, false)
     if result then
         event_log.add("build " .. building_key .. " at " .. math.floor(pos.x) .. "," .. math.floor(pos.y))
