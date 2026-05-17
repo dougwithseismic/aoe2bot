@@ -274,6 +274,21 @@ function helpers.find_gold(rt, tc_pos)
     end, nil)
 end
 
+-- ══ Construction ══
+
+local construction = nil
+
+function helpers.init_construction()
+    helpers.get("init_construction", function()
+        construction = ConstructionPlacement:new()
+        Log("[helpers] ConstructionPlacement OK")
+    end, nil)
+end
+
+function helpers.get_construction()
+    return construction
+end
+
 -- ══ Commands ══
 
 function helpers.train_vil()
@@ -290,25 +305,15 @@ function helpers.train_vil()
 end
 
 function helpers.build(building_key, pos, builders)
+    if not construction then return false end
     local typeId = UnitObjectType[building_key]
     if not typeId then
         Log("[helpers] " .. building_key .. " not found in UnitObjectType")
         return false
     end
     if not pos then return false end
-    if not builders or #builders == 0 then
-        local idle = helpers.idle_vils()
-        if #idle > 0 then
-            builders = { helpers.nearest(idle, pos) }
-        else
-            local vils = helpers.vils()
-            if #vils > 0 then builders = { helpers.nearest(vils, pos) } end
-        end
-    end
-    if not builders or #builders == 0 then return false end
-    if not builders[1] then return false end
     local result = helpers.get("build:" .. building_key, function()
-        return UnitsBuildStructure(builders, typeId, pos)
+        return construction:BuildStructure(typeId, pos, 0, 1)
     end, false)
     if result then
         event_log.add("build " .. building_key .. " at " .. math.floor(pos.x) .. "," .. math.floor(pos.y))
@@ -317,11 +322,19 @@ function helpers.build(building_key, pos, builders)
 end
 
 function helpers.build_near_tc(building_key, size, ox, oy)
-    local tc = helpers.tc_pos()
-    if not tc then return false end
-    local spot = helpers.find_placement(math.floor(tc.x + (ox or 0)), math.floor(tc.y + (oy or 0)), size or 2)
-    if not spot then return false end
-    return helpers.build(building_key, spot)
+    if not construction then return false end
+    local typeId = UnitObjectType[building_key]
+    if not typeId then
+        Log("[helpers] " .. building_key .. " not found in UnitObjectType")
+        return false
+    end
+    local result = helpers.get("build_tc:" .. building_key, function()
+        return construction:BuildStructureAtTown(typeId, 1)
+    end, false)
+    if result then
+        event_log.add("build " .. building_key .. " near TC")
+    end
+    return result
 end
 
 function helpers.gather(units, target)

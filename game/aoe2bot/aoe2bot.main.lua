@@ -33,6 +33,7 @@ function Init()
         rt = ResourceTracker:new()
         Log(TAG .. " ResourceTracker OK")
     end)
+    h.init_construction()
     build_order.init(rt)
     Log(TAG .. " Build order active")
 end
