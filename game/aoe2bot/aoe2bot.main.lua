@@ -11,17 +11,21 @@ function Load(playerId)
     Settings.AddBool("Show Overlay", true)
     Settings.AddBool("Run Build Order", true)
 
-    local options = GetCurrentGameOptions()
-    if options then
-        options:SetAIDifficulty(OptionsAIDifficulty.HARD)
-        options:SetLocation(OptionsLocation.ARABIA)
-        options:SetMapSize(OptionsMapSize.TINY)
-        options:SetPopulation(200)
-        options:SetStartingAge(OptionsAge.DARK_AGE)
-        options:SetGameSpeed(1.5)
-        options:SetPlayersCount(2)
-        DispatchStartGame()
-        Log(TAG .. " Game dispatched")
+    if IsMenuOpen() then
+        local options = GetCurrentGameOptions()
+        if options then
+            pcall(function() options:SetAIDifficulty(OptionsAIDifficulty.HARD) end)
+            pcall(function() options:SetLocation(OptionsLocation.ARABIA) end)
+            pcall(function() options:SetMapSize(OptionsMapSize.TINY) end)
+            pcall(function() options:SetPopulation(200) end)
+            pcall(function() options:SetStartingAge(OptionsAge.DARK_AGE) end)
+            pcall(function() options:SetGameSpeed(1.5) end)
+            pcall(function() options:SetPlayersCount(2) end)
+            DispatchStartGame()
+            Log(TAG .. " Game dispatched")
+        end
+    else
+        Log(TAG .. " Already in game, skipping auto-start")
     end
 end
 
@@ -33,7 +37,7 @@ function Init()
         rt = ResourceTracker:new()
         Log(TAG .. " ResourceTracker OK")
     end)
-    h.init_construction()
+    h.init_construction(rt)
     build_order.init(rt)
     Log(TAG .. " Build order active")
 end

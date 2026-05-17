@@ -277,10 +277,17 @@ end
 -- ══ Construction ══
 
 local construction = nil
+local vilOccupation = nil
 
-function helpers.init_construction()
+function helpers.init_construction(resource_tracker)
     helpers.get("init_construction", function()
-        construction = ConstructionPlacement:new()
+        if resource_tracker then
+            vilOccupation = VillagerOccupation:new(resource_tracker)
+            Log("[helpers] VillagerOccupation OK")
+            construction = ConstructionPlacement:new(vilOccupation)
+        else
+            construction = ConstructionPlacement:new(nil)
+        end
         Log("[helpers] ConstructionPlacement OK")
     end, nil)
 end
@@ -349,10 +356,44 @@ function helpers.move(units, pos)
 end
 
 function helpers.auto_scout(scout_unit)
-    -- Use built-in EnableScouting() which auto-finds the scout unit
-    local result = helpers.get("auto_scout", function() return EnableScouting() end, false)
-    if result then event_log.add("enable auto-scout") end
-    return result
+    -- Circle scout: waypoints around base starting from map-edge side
+    return helpers.get("auto_scout", function()
+        local p = GetAssignedPlayer()
+        local scout = nil
+        -- Find any alive military-ish unit (scout cavalry, champion scout, etc.)
+        for _, u in ipairs(p:GetPlayerObjects()) do
+            if u:IsAlive() then
+                local cls = u:GetClass()
+                if cls ~= 904 and cls ~= 903 and cls ~= 958 then
+                    scout = u
+                    break
+                end
+            end
+        end
+        if not scout then return false end
+
+        local tc = helpers.tc_pos()
+        if not tc then return false end
+
+        local mapW, mapH = GetMapWidth(), GetMapHeight()
+        local safeAngle = math.atan2(tc.y - mapH / 2, tc.x - mapW / 2)
+
+        local waypoints = {}
+        local radius = 20
+        for i = 0, 7 do
+            local angle = safeAngle + (i / 8) * 2 * math.pi
+            table.insert(waypoints, Vector2(tc.x + radius * math.cos(angle), tc.y + radius * math.sin(angle)))
+        end
+
+        -- Send to first waypoint, then queue the rest
+        UnitsMove({scout}, waypoints[1])
+        for i = 2, #waypoints do
+            UnitsMove({scout}, waypoints[i])
+        end
+
+        event_log.add("scout circle (" .. #waypoints .. " waypoints)")
+        return true
+    end, false)
 end
 
 function helpers.research(tech_id, label)
