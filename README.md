@@ -1,159 +1,71 @@
-# Turborepo starter
+# AoE2Bot
 
-This Turborepo starter is maintained by the Turborepo core team.
+A boilerplate for building an AoE2Control bot module that auto-starts a skirmish game and runs logic each tick.
 
-## Using this example
+## Prerequisites
 
-Run the following command:
+- Windows 11
+- Age of Empires II: Definitive Edition (installed and launchable)
+- [AoE2Control](https://github.com/AoE2Control/AoE2Control/releases) — extract to `tools/AoE2Control/`
 
-```sh
-npx create-turbo@latest
+## Project Structure
+
+```
+aoe2bot/
+├── game/aoe2bot/
+│   └── aoe2bot.main.lua       # Bot module (session control + game loop)
+├── scripts/
+│   └── launch.ps1             # Headless launcher script
+├── tools/
+│   └── CONTROL_LUA_ENGINE_REFERENCE.md
+└── CLAUDE.md
 ```
 
-## What's inside?
+## Quick Start
 
-This Turborepo includes the following packages/apps:
+1. Start Age of Empires II: DE (get to the main menu)
+2. Run the launcher:
 
-### Apps and Packages
-
-- `docs`: a [Next.js](https://nextjs.org/) app
-- `web`: another [Next.js](https://nextjs.org/) app
-- `@repo/ui`: a stub React component library shared by both `web` and `docs` applications
-- `@repo/eslint-config`: `eslint` configurations (includes `eslint-config-next` and `eslint-config-prettier`)
-- `@repo/typescript-config`: `tsconfig.json`s used throughout the monorepo
-
-Each package/app is 100% [TypeScript](https://www.typescriptlang.org/).
-
-### Utilities
-
-This Turborepo has some additional tools already setup for you:
-
-- [TypeScript](https://www.typescriptlang.org/) for static type checking
-- [ESLint](https://eslint.org/) for code linting
-- [Prettier](https://prettier.io) for code formatting
-
-### Build
-
-To build all apps and packages, run the following command:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
-
-```sh
-cd my-turborepo
-turbo build
+```powershell
+.\scripts\launch.ps1
 ```
 
-Without global `turbo`, use your package manager:
+This uses `--headless` mode with `--override-module` to inject the bot module and start CONTROL without a GUI window.
 
-```sh
-cd my-turborepo
-npx turbo build
-pnpm dlx turbo build
-pnpm exec turbo build
+3. The module auto-configures a 1v1 skirmish on Arabia and calls `DispatchStartGame()`.
+
+## How It Works
+
+| Lifecycle | What happens |
+|-----------|-------------|
+| `Load()` | Registers settings, configures game options, dispatches game start |
+| `Init()` | Called when the match is ready — set up per-match state here |
+| `Update()` | Called every tick — put your bot logic here |
+| `End()` | Match ended — log result, clean up |
+
+## Headless Mode
+
+```powershell
+AoE2Control.exe --headless --override-module "path/to/game/aoe2bot"
 ```
 
-You can build a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
+- `--headless`: No GUI, outputs status to stdout
+- `--override-module <folder>`: Copies module into CONTROL's modules dir before startup
+- Exit codes: 0=success, 1=already running, 2=bad args, 3=override failed, 4=startup failed
 
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
+## Session Control API
 
-```sh
-turbo build --filter=docs
+```lua
+local options = GetCurrentGameOptions()
+options:SetAIDifficulty(OptionsAIDifficulty.HARD)
+options:SetLocation(OptionsLocation.ARABIA)
+options:SetMapSize(OptionsMapSize.TINY)
+options:SetPopulation(200)
+DispatchStartGame()
 ```
 
-Without global `turbo`:
+See `tools/CONTROL_LUA_ENGINE_REFERENCE.md` for the full API.
 
-```sh
-npx turbo build --filter=docs
-pnpm exec turbo build --filter=docs
-pnpm exec turbo build --filter=docs
-```
+## Next Steps
 
-### Develop
-
-To develop all apps and packages, run the following command:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
-
-```sh
-cd my-turborepo
-turbo dev
-```
-
-Without global `turbo`, use your package manager:
-
-```sh
-cd my-turborepo
-npx turbo dev
-pnpm exec turbo dev
-pnpm exec turbo dev
-```
-
-You can develop a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
-
-```sh
-turbo dev --filter=web
-```
-
-Without global `turbo`:
-
-```sh
-npx turbo dev --filter=web
-pnpm exec turbo dev --filter=web
-pnpm exec turbo dev --filter=web
-```
-
-### Remote Caching
-
-> [!TIP]
-> Vercel Remote Cache is free for all plans. Get started today at [vercel.com](https://vercel.com/signup?utm_source=remote-cache-sdk&utm_campaign=free_remote_cache).
-
-Turborepo can use a technique known as [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching) to share cache artifacts across machines, enabling you to share build caches with your team and CI/CD pipelines.
-
-By default, Turborepo will cache locally. To enable Remote Caching you will need an account with Vercel. If you don't have an account you can [create one](https://vercel.com/signup?utm_source=turborepo-examples), then enter the following commands:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
-
-```sh
-cd my-turborepo
-turbo login
-```
-
-Without global `turbo`, use your package manager:
-
-```sh
-cd my-turborepo
-npx turbo login
-pnpm exec turbo login
-pnpm exec turbo login
-```
-
-This will authenticate the Turborepo CLI with your [Vercel account](https://vercel.com/docs/concepts/personal-accounts/overview).
-
-Next, you can link your Turborepo to your Remote Cache by running the following command from the root of your Turborepo:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
-
-```sh
-turbo link
-```
-
-Without global `turbo`:
-
-```sh
-npx turbo link
-pnpm exec turbo link
-pnpm exec turbo link
-```
-
-## Useful Links
-
-Learn more about the power of Turborepo:
-
-- [Tasks](https://turborepo.dev/docs/crafting-your-repository/running-tasks)
-- [Caching](https://turborepo.dev/docs/crafting-your-repository/caching)
-- [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching)
-- [Filtering](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters)
-- [Configuration Options](https://turborepo.dev/docs/reference/configuration)
-- [CLI Usage](https://turborepo.dev/docs/reference/command-line-reference)
+Edit `game/aoe2bot/aoe2bot.main.lua` and add your logic in `Update()`. The module reloads when you re-run the launch script.
