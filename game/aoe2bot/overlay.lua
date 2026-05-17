@@ -49,8 +49,18 @@ function overlay.render_state_panel(screen)
     cy = cy + LINE_HEIGHT
 
     local pop = GetFact(Fact.POPULATION) or 0
-    local housing = pop
-    if Fact.POPULATION_HEADROOM then housing = pop + (GetFact(Fact.POPULATION_HEADROOM) or 0) end
+    local housing = 5
+    pcall(function()
+        local p = GetAssignedPlayer()
+        local tcs = p:GetTownCenters()
+        local houses = 0
+        for _, o in ipairs(p:GetPlayerObjects()) do
+            if o:IsAlive() and string.find(string.upper(o:GetName() or ""), "HOUSE") then
+                houses = houses + 1
+            end
+        end
+        housing = #tcs * 5 + houses * 5
+    end)
     RenderText(string.format("Pop: %d / %d", pop, housing), Vector2(tx, cy), FONT_SIZE, COL_TEXT, false, false)
     cy = cy + LINE_HEIGHT + 4
 

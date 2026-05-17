@@ -63,10 +63,8 @@ end
 
 local function ensure_scouting()
     if state.scouting then return false end
-    local scout = h.scout()
-    if not scout then return false end
     state.scouting = true
-    return h.auto_scout(scout)
+    return h.auto_scout()
 end
 
 -- ── Resource Helpers ──
@@ -195,10 +193,10 @@ local function build_mill()
                 local fp = best:GetPosition()
                 local dx, dy = tc.x - fp.x, tc.y - fp.y
                 local dd = math.max(math.sqrt(dx * dx + dy * dy), 0.1)
-                return Vector3(fp.x + dx / dd * 2, fp.y + dy / dd * 2, 0)
+                return Vector2(fp.x + dx / dd * 2, fp.y + dy / dd * 2, 0)
             end
         end
-        return Vector3(tc.x + 5, tc.y, 0)
+        return Vector2(tc.x + 5, tc.y, 0)
     end)
     if not ok then return false end
 
@@ -309,55 +307,27 @@ function bo.update(resource_tracker)
     state.tick = state.tick + 1
     if state.house_cd > 0 then state.house_cd = state.house_cd - 1 end
 
-    -- DEBUG: test one function at a time. Uncomment to find the crasher.
-    if state.tick == 3 then
-        Log("[BO] tick 3: testing h.pop()")
-        local pop = h.pop()
-        Log("[BO] pop: " .. tostring(pop.current) .. "/" .. tostring(pop.housing) .. " vils=" .. tostring(pop.vils))
-    end
-
-    if state.tick == 5 then
-        Log("[BO] tick 5: testing h.tcs()")
-        local tcs = h.tcs()
-        Log("[BO] tcs: " .. tostring(#tcs))
-    end
-
-    if state.tick == 7 then
-        Log("[BO] tick 7: testing h.vils()")
-        local vils = h.vils()
-        Log("[BO] vils: " .. tostring(#vils))
-    end
-
-    if state.tick == 9 then
-        Log("[BO] tick 9: testing h.scout()")
-        local scout = h.scout()
-        Log("[BO] scout: " .. tostring(scout))
-    end
-
-    if state.tick == 11 then
-        Log("[BO] tick 11: testing h.idle_vils()")
-        local idle = h.idle_vils()
-        Log("[BO] idle: " .. tostring(#idle))
-    end
-
-    if state.tick == 13 then
-        Log("[BO] tick 13: testing h.find_food()")
-        local tc = h.tc_pos()
-        if tc then
-            local food = h.find_food(rt, tc)
-            Log("[BO] food: " .. tostring(food))
-        end
-    end
-
-    if state.tick == 15 then
-        Log("[BO] tick 15: testing h.train_vil()")
-        h.train_vil()
-    end
-
-    if state.tick == 17 then
-        Log("[BO] tick 17: testing ensure_scouting")
+    local ok, err = pcall(function()
         ensure_scouting()
-    end
+        if ensure_houses() then return end
+        if ensure_training() then return end
+
+        if not state.food_forced then
+            if force_initial_food() then return end
+        end
+
+        if build_lumber_camp() then return end
+        if build_mill() then return end
+        if build_mining_camp() then return end
+        if assign_idle_by_count() then return end
+
+        if research_loom() then return end
+        if click_feudal() then return end
+        if feudal_upgrades() then return end
+
+        if state.tick % 5 == 0 then herd_livestock() end
+    end)
+    if not ok then Log("[BO] ERR tick " .. state.tick .. ": " .. tostring(err)) end
 end
 
 return bo

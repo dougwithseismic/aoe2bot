@@ -72,8 +72,21 @@ end
 function helpers.scout()
     return helpers.get("scout", function()
         local p = GetAssignedPlayer()
-        for _, u in ipairs(p:GetObjectsByClass(961)) do
-            if u:IsAlive() then return u end
+        -- Try class 961 (scout cavalry)
+        local byClass = p:GetObjectsByClass(961)
+        if byClass then
+            for _, u in ipairs(byClass) do
+                if u:IsAlive() then return u end
+            end
+        end
+        -- Fallback: find by name
+        for _, u in ipairs(p:GetPlayerObjects()) do
+            if u:IsAlive() then
+                local name = string.upper(u:GetName() or "")
+                if string.find(name, "SCOUT") and not string.find(name, "SCOUTING") then
+                    return u
+                end
+            end
         end
         return nil
     end, nil)
@@ -94,15 +107,24 @@ end
 function helpers.pop()
     return helpers.get("pop", function()
         local current = GetFact(Fact.POPULATION) or 0
-        local headroom = 0
-        if Fact.POPULATION_HEADROOM then headroom = GetFact(Fact.POPULATION_HEADROOM) or 0 end
+        -- Count housing from buildings: TC=5, House=5
+        local p = GetAssignedPlayer()
+        local tcs = p:GetTownCenters()
+        local houses = 0
+        for _, o in ipairs(p:GetPlayerObjects()) do
+            if o:IsAlive() and string.find(string.upper(o:GetName() or ""), "HOUSE") then
+                houses = houses + 1
+            end
+        end
+        local housing = #tcs * 5 + houses * 5
+        local headroom = housing - current
         local vilCount = 0
         if Fact.VILLAGER_COUNT then vilCount = GetFact(Fact.VILLAGER_COUNT) or 0 end
         if vilCount == 0 then vilCount = #helpers.vils() end
         return {
             current = current,
             headroom = headroom,
-            housing = current + headroom,
+            housing = housing,
             vils = vilCount,
         }
     end, { current = 0, headroom = 0, housing = 0, vils = 0 })
@@ -198,7 +220,7 @@ function helpers.find_placement(cx, cy, size)
     for r = 0, 10, 2 do
         for _, off in ipairs({{r,0},{-r,0},{0,r},{0,-r},{r,r},{-r,r},{r,-r},{-r,-r}}) do
             if helpers.is_footprint_clear(cx + off[1], cy + off[2], size) then
-                return Vector3(cx + off[1], cy + off[2], 0)
+                return Vector2(cx + off[1], cy + off[2])
             end
         end
     end
@@ -314,10 +336,8 @@ function helpers.move(units, pos)
 end
 
 function helpers.auto_scout(scout_unit)
-    if not scout_unit then return false end
-    local ok, alive = pcall(function() return scout_unit:IsAlive() end)
-    if not ok or not alive then return false end
-    local result = helpers.get("auto_scout", function() return SetUnitStanceAutoScout({scout_unit}) end, false)
+    -- Use built-in EnableScouting() which auto-finds the scout unit
+    local result = helpers.get("auto_scout", function() return EnableScouting() end, false)
     if result then event_log.add("enable auto-scout") end
     return result
 end
