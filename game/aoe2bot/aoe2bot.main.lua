@@ -1,14 +1,18 @@
--- AoE2Bot — Boilerplate Module for AoE2Control
--- Auto-starts a skirmish game via Session Control, then runs bot logic each tick.
+-- AoE2Bot — Module with game state overlay + event log
+-- Auto-starts a skirmish, renders HUD overlay, logs actions.
+
+local overlay = require("overlay")
+local event_log = require("event_log")
 
 local TAG = "[AoE2Bot]"
-local gameStarted = false
 local tickCount = 0
 
 function Load(playerId)
     Log(TAG .. " Loading for player " .. tostring(playerId))
 
     Settings.AddBool("Auto Start Game", true)
+    Settings.AddBool("Show Overlay", true)
+    Settings.AddBool("Show Event Log", true)
     Settings.AddDropdown("Difficulty", "Hard", { "Easiest", "Standard", "Moderate", "Hard", "Hardest", "Extreme" })
     Settings.AddDropdown("Map", "Arabia", { "Arabia", "Arena", "Black Forest", "Nomad", "Islands" })
     Settings.AddInt("Population Limit", 200, 25, 500)
@@ -42,33 +46,34 @@ function configureAndStart()
 end
 
 function Init()
-    gameStarted = true
     tickCount = 0
-    Log(TAG .. " Match started — Init called")
+    event_log.clear()
+    event_log.add("Match started")
+    Log(TAG .. " Init — match ready")
 end
 
 function Update()
     tickCount = tickCount + 1
 
     -- Your bot logic goes here.
-    -- This runs every update tick (~configured interval in settings.ini).
-    -- Example: log every 100 ticks
-    if tickCount % 100 == 0 then
-        Log(TAG .. " Tick " .. tostring(tickCount))
-    end
+    -- Use event_log.add() to log actions:
+    --   event_log.add("place barracks at 45,60 with 4 vils [12,13,14,15]")
+    --   event_log.add("train villager from TC")
+    --   event_log.add("advance to Feudal Age")
 end
 
 function Render()
-    -- Optional: draw overlays each frame
+    if Settings.GetBool("Show Overlay", true) then
+        overlay.render()
+    end
 end
 
 function End(hasWon)
     if hasWon then
-        Log(TAG .. " Victory!")
+        event_log.add("VICTORY")
     else
-        Log(TAG .. " Defeat or game ended")
+        event_log.add("Defeat / game ended")
     end
-    gameStarted = false
 end
 
 function Unload()

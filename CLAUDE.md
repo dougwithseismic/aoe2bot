@@ -5,7 +5,9 @@
 ```
 aoe2bot/
 ├── game/aoe2bot/
-│   └── aoe2bot.main.lua       # Bot module — auto-starts game, runs logic each tick
+│   ├── aoe2bot.main.lua       # Main module — lifecycle, session control, bot logic
+│   ├── overlay.lua            # HUD overlay — game state panel + event log
+│   └── event_log.lua          # Event log — timestamped action history
 ├── scripts/
 │   └── launch.ps1             # Headless launcher (--override-module)
 ├── tools/
@@ -33,9 +35,22 @@ AoE2Control.exe --headless --override-module game/aoe2bot
     └── Injects DLL into AoE2:DE
         └── Loads aoe2bot.main.lua
             ├── Load()   → configure GameOptions, DispatchStartGame()
-            ├── Init()   → match ready, set up state
-            ├── Update() → bot logic each tick
+            ├── Init()   → match ready, clear event log
+            ├── Update() → bot logic each tick (use event_log.add() to log actions)
+            ├── Render() → draws overlay (game state + event log)
             └── End()    → match over
+```
+
+### Overlay
+- **Left panel**: game time, age, population, resources (food/wood/gold/stone)
+- **Right panel**: scrolling event log with timestamps
+
+### Event Log Usage
+```lua
+local event_log = require("event_log")
+event_log.add("place barracks at 45,60 with 4 vils [12,13,14,15]")
+event_log.add("train villager from TC")
+event_log.add("advance to Feudal Age")
 ```
 
 ## Module Lifecycle
