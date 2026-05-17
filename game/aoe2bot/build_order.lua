@@ -222,7 +222,7 @@ local function build_mining_camp()
     if not tc then return false end
 
     local gold, d = h.find_gold(rt, tc)
-    if not gold or d > 30 then return false end
+    if not gold or not d or d > 30 then return false end
 
     local ok, gp = pcall(function() return gold:GetPosition() end)
     if not ok then return false end
