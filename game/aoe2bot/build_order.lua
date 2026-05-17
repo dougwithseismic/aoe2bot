@@ -157,92 +157,50 @@ end
 
 local function build_lumber_camp()
     if state.built.lc then return false end
+    if state.built.lc_cd and state.built.lc_cd > 0 then state.built.lc_cd = state.built.lc_cd - 1; return false end
     local pop = h.pop()
     if pop.vils < 7 then return false end
     if not h.can_afford(0, 100, 0, 0) then return false end
 
-    refresh_wood_target()
-    if not state.wood_target then return false end
-
-    local tc = h.tc_pos()
-    if not tc then return false end
-
-    local ok, wpos = pcall(function() return state.wood_target:GetPosition() end)
-    if not ok then return false end
-
-    local dx, dy = tc.x - wpos.x, tc.y - wpos.y
-    local d = math.max(math.sqrt(dx * dx + dy * dy), 0.1)
-    local spot = h.find_placement(
-        math.floor(wpos.x + dx / d * 3),
-        math.floor(wpos.y + dy / d * 3),
-        2
-    )
-    if not spot then return false end
-
-    local built = h.build("LUMBER_CAMP_DARK_AGE", spot)
-    if built then state.built.lc = true end
+    local built = h.build_near_tc("LUMBER_CAMP_DARK_AGE", 2)
+    if built then
+        state.built.lc = true
+    else
+        state.built.lc_cd = 20
+    end
     return built
 end
 
 local function build_mill()
     if state.built.mill then return false end
+    if state.built.mill_cd and state.built.mill_cd > 0 then state.built.mill_cd = state.built.mill_cd - 1; return false end
     if not state.built.lc then return false end
     local pop = h.pop()
     if pop.vils < 10 then return false end
     if not h.can_afford(0, 100, 0, 0) then return false end
 
-    local tc = h.tc_pos()
-    if not tc or not rt then return false end
-
-    local ok, result = pcall(function()
-        local forage = rt:GetForage()
-        if forage and #forage > 0 then
-            local best, d = h.nearest(forage, tc)
-            if best and d < 20 then
-                local fp = best:GetPosition()
-                local dx, dy = tc.x - fp.x, tc.y - fp.y
-                local dd = math.max(math.sqrt(dx * dx + dy * dy), 0.1)
-                return Vector2(fp.x + dx / dd * 2, fp.y + dy / dd * 2, 0)
-            end
-        end
-        return Vector2(tc.x + 5, tc.y, 0)
-    end)
-    if not ok then return false end
-
-    local spot = h.find_placement(math.floor(result.x), math.floor(result.y), 2)
-    if not spot then return false end
-
-    local built = h.build("MILL_DARK_AGE", spot)
-    if built then state.built.mill = true end
+    local built = h.build_near_tc("MILL_DARK_AGE", 2)
+    if built then
+        state.built.mill = true
+    else
+        state.built.mill_cd = 20
+    end
     return built
 end
 
 local function build_mining_camp()
     if state.built.mc then return false end
+    if state.built.mc_cd and state.built.mc_cd > 0 then state.built.mc_cd = state.built.mc_cd - 1; return false end
     local pop = h.pop()
     if pop.vils < 20 then return false end
     if not h.can_afford(0, 100, 0, 0) then return false end
 
-    local tc = h.tc_pos()
-    if not tc then return false end
-
-    local gold, d = h.find_gold(rt, tc)
-    if not gold or not d or d > 30 then return false end
-
-    local ok, gp = pcall(function() return gold:GetPosition() end)
-    if not ok then return false end
-
-    local dx, dy = tc.x - gp.x, tc.y - gp.y
-    local dd = math.max(math.sqrt(dx * dx + dy * dy), 0.1)
-    local spot = h.find_placement(
-        math.floor(gp.x + dx / dd * 3),
-        math.floor(gp.y + dy / dd * 3),
-        2
-    )
-    if not spot then return false end
-
-    local built = h.build("MINING_CAMP_DARK_AGE", spot)
-    if built then state.built.mc = true end
+    local built = h.build_near_tc("MINING_CAMP_DARK_AGE", 2)
+    if built then
+        state.built.mc = true
+    else
+        state.built.mc_cd = 20
+    end
     return built
 end
 

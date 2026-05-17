@@ -205,8 +205,10 @@ function helpers.is_footprint_clear(cx, cy, size)
                 if not tile:IsBuildable() or not tile:IsWalkable() then return false end
                 if tile:GetObjectCount() > 0 then
                     for _, obj in ipairs(tile:GetObjects()) do
-                        local cls = obj:GetClass()
-                        if cls ~= 904 and cls ~= 961 and cls ~= 958 then return false end
+                        if obj:IsVisible() then
+                            local cls = obj:GetClass()
+                            if cls ~= 904 and cls ~= 961 and cls ~= 958 then return false end
+                        end
                     end
                 end
             end
@@ -297,7 +299,7 @@ function helpers.get_construction()
 end
 
 function helpers.update_construction()
-    if vilOccupation then pcall(function() vilOccupation:Update() end) end
+    -- Do NOT update vilOccupation — it auto-reassigns vils and overrides our build order
     if construction then pcall(function() construction:Update() end) end
 end
 
@@ -329,12 +331,11 @@ function helpers.build(building_key, pos, builders)
         Log("[helpers] " .. building_key .. " not found")
         return false
     end
-    if not pos then return false end
     local result = helpers.get("build:" .. building_key, function()
-        return construction:BuildStructureAtTown(typeId, pos, 1)
+        return construction:BuildStructureAtTown(typeId, 1)
     end, false)
     if result then
-        event_log.add("build " .. building_key .. " at " .. math.floor(pos.x) .. "," .. math.floor(pos.y))
+        event_log.add("build " .. building_key)
     end
     return result
 end
