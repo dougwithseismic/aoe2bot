@@ -1,25 +1,12 @@
--- AoE2Bot — Module with game state overlay + event log
--- Auto-starts a skirmish, renders HUD overlay, logs actions.
+-- AoE2Bot — 22-Pop Scout Rush with overlay + event log
+-- Auto-starts a skirmish, runs build order, renders HUD.
 
 local overlay = require("overlay")
 local event_log = require("event_log")
+local build_order = require("build_order")
 
 local TAG = "[AoE2Bot]"
-local tickCount = 0
-
-function Load(playerId)
-    Log(TAG .. " Loading for player " .. tostring(playerId))
-
-    Settings.AddBool("Auto Start Game", true)
-    Settings.AddBool("Show Overlay", true)
-    Settings.AddDropdown("Difficulty", "Hard", { "Easiest", "Standard", "Moderate", "Hard", "Hardest", "Extreme" })
-    Settings.AddDropdown("Map", "Arabia", { "Arabia", "Arena", "Black Forest", "Nomad", "Islands" })
-    Settings.AddInt("Population Limit", 200, 25, 500)
-
-    if Settings.GetBool("Auto Start Game", true) then
-        configureAndStart()
-    end
-end
+local rt = nil
 
 local DIFFICULTY_MAP = {
     Easiest = OptionsAIDifficulty.EASIEST,
@@ -37,6 +24,21 @@ local LOCATION_MAP = {
     Nomad = OptionsLocation.NOMAD,
     Islands = OptionsLocation.ISLANDS,
 }
+
+function Load(playerId)
+    Log(TAG .. " Loading for player " .. tostring(playerId))
+
+    Settings.AddBool("Auto Start Game", true)
+    Settings.AddBool("Show Overlay", true)
+    Settings.AddBool("Run Build Order", true)
+    Settings.AddDropdown("Difficulty", "Hard", { "Easiest", "Standard", "Moderate", "Hard", "Hardest", "Extreme" })
+    Settings.AddDropdown("Map", "Arabia", { "Arabia", "Arena", "Black Forest", "Nomad", "Islands" })
+    Settings.AddInt("Population Limit", 200, 25, 500)
+
+    if Settings.GetBool("Auto Start Game", true) then
+        configureAndStart()
+    end
+end
 
 function configureAndStart()
     local options = GetCurrentGameOptions()
@@ -66,20 +68,23 @@ function configureAndStart()
 end
 
 function Init()
-    tickCount = 0
     event_log.clear()
-    event_log.add("Match started")
-    Log(TAG .. " Init — match ready")
+    event_log.add("Match started — 22 Pop Scout Rush")
+
+    pcall(function()
+        rt = ResourceTracker:new()
+    end)
+
+    build_order.init(rt)
+    Log(TAG .. " Init — match ready, build order active")
 end
 
 function Update()
-    tickCount = tickCount + 1
+    if rt then pcall(function() rt:Update() end) end
 
-    -- Your bot logic goes here.
-    -- Use event_log.add() to log actions:
-    --   event_log.add("place barracks at 45,60 with 4 vils [12,13,14,15]")
-    --   event_log.add("train villager from TC")
-    --   event_log.add("advance to Feudal Age")
+    if Settings.GetBool("Run Build Order", true) then
+        build_order.update(rt)
+    end
 end
 
 function Render()

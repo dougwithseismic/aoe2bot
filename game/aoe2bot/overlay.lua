@@ -63,8 +63,9 @@ function overlay.render_state_panel(screen)
     cy = cy + LINE_HEIGHT
 
     local pop = GetFact(Fact.POPULATION) or 0
-    local popCap = GetFact(Fact.POPULATION_CAP) or 0
-    RenderText(string.format("Pop: %d / %d", pop, popCap), setPos(STATE_TX, cy), FONT_SIZE, COL_TEXT, false, false)
+    local headroom = GetFact(Fact.POPULATION_HEADROOM) or 0
+    local housing = pop + headroom
+    RenderText(string.format("Pop: %d / %d", pop, housing), setPos(STATE_TX, cy), FONT_SIZE, COL_TEXT, false, false)
     cy = cy + LINE_HEIGHT + 4
 
     local food = GetFact(Fact.FOOD_AMOUNT) or 0
