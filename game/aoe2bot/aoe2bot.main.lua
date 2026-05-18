@@ -18,7 +18,7 @@ function Load(playerId)
         pcall(function() options:SetMapSize(OptionsMapSize.TINY) end)
         pcall(function() options:SetPopulation(200) end)
         pcall(function() options:SetStartingAge(OptionsAge.DARK_AGE) end)
-        pcall(function() options:SetGameSpeed(1.5) end)
+        pcall(function() options:SetGameSpeed(10) end)
         pcall(function() options:SetPlayersCount(2) end)
         local ok = DispatchStartGame()
         if ok then Log(TAG .. " Game dispatched") else Log(TAG .. " DispatchStartGame false (already in game?)") end

@@ -1,5 +1,6 @@
 -- 22-Pop Scout Rush Build Order
--- Priority-based: critical actions always run first, then build order steps.
+-- Priority-based state machine: critical actions first, then build order steps.
+-- Buildings use state tracking (none → ordered → done) verified against the map.
 
 local h = require("helpers")
 local event_log = require("event_log")
@@ -11,17 +12,9 @@ local TECH_FEUDAL = 101
 local TECH_DOUBLE_BIT_AXE = 202
 local TECH_HORSE_COLLAR = 14
 
-local state = {
-    tick = 0,
-    scouting = false,
-    wood_target = nil,
-    built = {},
-    house_cd = 0,
-    food_forced = false,
-    feudal_clicked = false,
-    loom_done = false,
-}
+local ORDERED_TIMEOUT = 120
 
+local state = {}
 local rt = nil
 
 function bo.init(resource_tracker)
@@ -30,44 +23,43 @@ function bo.init(resource_tracker)
         tick = 0,
         scouting = false,
         wood_target = nil,
-        built = {},
-        house_cd = 0,
-        houses_ordered = 0,
         food_forced = false,
         feudal_clicked = false,
         loom_done = false,
+        lc = "none",
+        mill = "none",
+        mc = "none",
+        barracks = "none",
+        range = "none",
+        lc_ordered_at = 0,
+        mill_ordered_at = 0,
+        mc_ordered_at = 0,
+        barracks_ordered_at = 0,
+        range_ordered_at = 0,
+        houses_pending = 0,
+        houses_seen = 0,
     }
 end
 
--- ── Priority Actions (always checked) ──
+-- ── Building State Checks ──
 
-local function ensure_houses()
-    if state.house_cd > 0 then return false end
-    local pop = h.pop()
-    -- Account for houses we've already ordered but aren't built yet
-    local effective_headroom = pop.headroom + (state.houses_ordered * 5)
-    if effective_headroom > 4 then return false end
-    if not h.can_afford(0, 25, 0, 0) then return false end
-    local ok = h.build_near_tc("HOUSE_DARK_AGE", 2, -4, 4)
-    if ok then
-        state.houses_ordered = (state.houses_ordered or 0) + 1
-        state.house_cd = 50
-    else
-        state.house_cd = 10
+local function sync_building(key, pattern)
+    if state[key] == "done" then return "done" end
+    if #h.buildings(pattern) > 0 then
+        state[key] = "done"
+        return "done"
     end
-    return ok
+    if state[key] == "ordered" then
+        local ordered_at = state[key .. "_ordered_at"] or 0
+        if state.tick - ordered_at > ORDERED_TIMEOUT then
+            state[key] = "none"
+            return "none"
+        end
+    end
+    return state[key]
 end
 
-local function ensure_training()
-    local pop = h.pop()
-    if pop.headroom <= 0 then return false end
-    if not h.can_afford(50, 0, 0, 0) then return false end
-    local tcs = h.tcs()
-    if #tcs == 0 then return false end
-    local ok, idle = pcall(function() return tcs[1]:IsIdle() end)
-    if not ok or not idle then return false end
-    return h.train_vil()
-end
+-- ── Priority Actions (always checked) ──
 
 local function ensure_scouting()
     if state.scouting then return false end
@@ -75,16 +67,52 @@ local function ensure_scouting()
     return h.auto_scout()
 end
 
+local function ensure_houses()
+    local pop = h.pop()
+    local built_houses = #h.buildings("HOUSE")
+    if built_houses < state.houses_seen then
+        state.houses_pending = 0
+    elseif built_houses > state.houses_seen then
+        state.houses_pending = math.max(0, state.houses_pending - (built_houses - state.houses_seen))
+    end
+    state.houses_seen = built_houses
+    local tcs = h.tcs()
+    local housing_have = (built_houses + state.houses_pending) * 5 + #tcs * 5
+    if housing_have >= pop.current + 4 then return false end
+    if not h.can_afford(0, 25, 0, 0) then return false end
+    local ok = h.build_near_tc("HOUSE_DARK_AGE")
+    if ok then state.houses_pending = state.houses_pending + 1 end
+    return ok
+end
+
+local function ensure_training()
+    local pop = h.pop()
+    local built_houses = #h.buildings("HOUSE")
+    local tcs = h.tcs()
+    local housing = built_houses * 5 + #tcs * 5
+    if pop.current >= housing then return false end
+    if not h.can_afford(50, 0, 0, 0) then return false end
+    if #tcs == 0 then return false end
+    local ok, idle = pcall(function() return tcs[1]:IsIdle() end)
+    if not ok or not idle then return false end
+    return h.train_vil()
+end
+
 -- ── Resource Helpers ──
 
 local function refresh_wood_target()
-    local tc = h.tc_pos()
-    if not tc or not rt then return end
+    if not rt then return end
     if state.wood_target then
         local ok, alive = pcall(function() return state.wood_target:IsAlive() end)
         if ok and alive then return end
     end
-    state.wood_target = h.find_safe_trees(rt, tc)
+    local tree = h.find_trees_near_lc(rt)
+    if tree then
+        state.wood_target = tree
+        return
+    end
+    local tc = h.tc_pos()
+    if tc then state.wood_target = h.find_safe_trees(rt, tc) end
 end
 
 local function assign_to_food(vils)
@@ -119,9 +147,21 @@ local function force_initial_food()
     local ok = assign_to_food(idle)
     if ok then
         state.food_forced = true
-        event_log.add("idle vils → food (" .. #idle .. " vils)")
+        event_log.add("idle vils -> food (" .. #idle .. " vils)")
     end
     return ok
+end
+
+local function ensure_farms()
+    local pop = h.pop()
+    if pop.vils < 12 then return false end
+    local current_farms = h.farm_count(rt)
+    local max_farms = h.age() >= 1 and 12 or 8
+    if current_farms >= max_farms then return false end
+    local idle = h.idle_vils()
+    if #idle == 0 and current_farms > 0 then return false end
+    if not h.can_afford(0, 60, 0, 0) then return false end
+    return h.build_farm()
 end
 
 local function assign_idle_by_count()
@@ -130,13 +170,6 @@ local function assign_idle_by_count()
     local pop = h.pop()
     local n = pop.vils
 
-    -- 22-pop scout rush distribution:
-    -- Vils 1-6: food (sheep)
-    -- Vils 7-9: wood (lumber camp)
-    -- Vils 10-13: food (boar/berries)
-    -- Vils 14-17: food (berries/sheep)
-    -- Vils 18-21: wood
-    -- After Feudal click: maintain ratio
     if n <= 6 then
         return assign_to_food(idle)
     elseif n <= 9 then
@@ -149,57 +182,65 @@ local function assign_idle_by_count()
         local r = h.resources()
         if r.food < 200 then
             return assign_to_food(idle)
-        else
+        elseif r.wood < 100 then
             return assign_to_wood(idle)
+        else
+            return assign_to_food(idle)
         end
     end
 end
 
 local function build_lumber_camp()
-    if state.built.lc then return false end
-    if state.built.lc_cd and state.built.lc_cd > 0 then state.built.lc_cd = state.built.lc_cd - 1; return false end
+    if sync_building("lc", "LUMBER") ~= "none" then return false end
     local pop = h.pop()
     if pop.vils < 7 then return false end
     if not h.can_afford(0, 100, 0, 0) then return false end
 
-    local built = h.build_near_tc("LUMBER_CAMP_DARK_AGE", 2)
+    local tc = h.tc_pos()
+    local cluster = h.find_tree_cluster(rt, tc)
+    local built = cluster
+        and h.build_at("LUMBER_CAMP_DARK_AGE", cluster)
+        or h.build_near_tc("LUMBER_CAMP_DARK_AGE")
     if built then
-        state.built.lc = true
-    else
-        state.built.lc_cd = 20
+        state.lc = "ordered"
+        state.lc_ordered_at = state.tick
     end
     return built
 end
 
 local function build_mill()
-    if state.built.mill then return false end
-    if state.built.mill_cd and state.built.mill_cd > 0 then state.built.mill_cd = state.built.mill_cd - 1; return false end
-    if not state.built.lc then return false end
+    if sync_building("mill", "MILL") ~= "none" then return false end
+    if sync_building("lc", "LUMBER") ~= "done" then return false end
     local pop = h.pop()
     if pop.vils < 10 then return false end
     if not h.can_afford(0, 100, 0, 0) then return false end
 
-    local built = h.build_near_tc("MILL_DARK_AGE", 2)
+    local tc = h.tc_pos()
+    local berries = h.find_berry_pos(rt, tc)
+    local built = berries
+        and h.build_at("MILL_DARK_AGE", berries)
+        or h.build_near_tc("MILL_DARK_AGE")
     if built then
-        state.built.mill = true
-    else
-        state.built.mill_cd = 20
+        state.mill = "ordered"
+        state.mill_ordered_at = state.tick
     end
     return built
 end
 
 local function build_mining_camp()
-    if state.built.mc then return false end
-    if state.built.mc_cd and state.built.mc_cd > 0 then state.built.mc_cd = state.built.mc_cd - 1; return false end
+    if sync_building("mc", "MINING") ~= "none" then return false end
     local pop = h.pop()
     if pop.vils < 20 then return false end
     if not h.can_afford(0, 100, 0, 0) then return false end
 
-    local built = h.build_near_tc("MINING_CAMP_DARK_AGE", 2)
+    local tc = h.tc_pos()
+    local gold = h.find_gold_pos(rt, tc)
+    local built = gold
+        and h.build_at("MINING_CAMP_DARK_AGE", gold)
+        or h.build_near_tc("MINING_CAMP_DARK_AGE")
     if built then
-        state.built.mc = true
-    else
-        state.built.mc_cd = 20
+        state.mc = "ordered"
+        state.mc_ordered_at = state.tick
     end
     return built
 end
@@ -244,12 +285,60 @@ local function feudal_upgrades()
     return false
 end
 
+local function build_barracks()
+    if sync_building("barracks", "BARRACKS") ~= "none" then return false end
+    local pop = h.pop()
+    if pop.vils < 18 then return false end
+    if not h.can_afford(0, 175, 0, 0) then return false end
+    local ok = h.build_near_tc("BARRACKS_DARK_AGE")
+    if ok then
+        state.barracks = "ordered"
+        state.barracks_ordered_at = state.tick
+    end
+    return ok
+end
+
+local function build_archery_range()
+    if sync_building("range", "ARCHERY") ~= "none" then return false end
+    if h.age() < 1 then return false end
+    if sync_building("barracks", "BARRACKS") ~= "done" then return false end
+    if not h.can_afford(0, 175, 0, 0) then return false end
+    local ok = h.build_near_tc("ARCHERY_RANGE_FEUDAL_AGE")
+    if ok then
+        state.range = "ordered"
+        state.range_ordered_at = state.tick
+    end
+    return ok
+end
+
+local function train_military()
+    if h.age() < 1 then return false end
+    if #h.buildings("ARCHERY") == 0 then return false end
+    if not h.can_afford(25, 45, 0, 0) and not h.can_afford(25, 35, 0, 0) then return false end
+    local r = h.resources()
+    local result
+    if r.gold >= 45 then
+        result = h.get("train_archer", function()
+            local typeId = UnitObjectType["ARCHER_FEUDAL_AGE"] or UnitObjectType["ARCHER"]
+            if not typeId then return false end
+            return TrainUnit(typeId)
+        end, false)
+        if result then event_log.add("train archer"); return true end
+    end
+    result = h.get("train_skirm", function()
+        local typeId = UnitObjectType["SKIRMISHER_FEUDAL_AGE"] or UnitObjectType["SKIRMISHER"]
+        if not typeId then return false end
+        return TrainUnit(typeId)
+    end, false)
+    if result then event_log.add("train skirmisher"); return true end
+    return false
+end
+
 local function herd_livestock()
     if not rt then return false end
     local tc = h.tc_pos()
     if not tc then return false end
-
-    local ok, result = pcall(function()
+    return h.get("herd", function()
         local owned = rt:GetOwnedLivestock()
         if not owned then return false end
         local far = {}
@@ -259,12 +348,11 @@ local function herd_livestock()
             end
         end
         if #far > 0 then
-            UnitsMove(far, tc)
+            h.move(far, tc)
             return true
         end
         return false
-    end)
-    return ok and result or false
+    end, false)
 end
 
 -- ── Main Tick ──
@@ -272,7 +360,6 @@ end
 function bo.update(resource_tracker)
     rt = resource_tracker
     state.tick = state.tick + 1
-    if state.house_cd > 0 then state.house_cd = state.house_cd - 1 end
 
     local ok, err = pcall(function()
         ensure_scouting()
@@ -285,12 +372,16 @@ function bo.update(resource_tracker)
 
         if build_lumber_camp() then return end
         if build_mill() then return end
-        if build_mining_camp() then return end
+        if ensure_farms() then return end
         if assign_idle_by_count() then return end
+        if build_barracks() then return end
+        if build_mining_camp() then return end
 
         if research_loom() then return end
         if click_feudal() then return end
         if feudal_upgrades() then return end
+        if build_archery_range() then return end
+        if train_military() then return end
 
         if state.tick % 5 == 0 then herd_livestock() end
     end)
