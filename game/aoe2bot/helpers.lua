@@ -3,6 +3,7 @@
 
 local helpers = {}
 local event_log = require("event_log")
+local tick_cache = {}
 
 -- ══ Error Tracking ══
 
@@ -33,6 +34,10 @@ end
 
 function helpers.get_errors() return errors end
 
+function helpers.begin_tick()
+    tick_cache = {}
+end
+
 -- ══ Queries ══
 
 function helpers.player()
@@ -55,7 +60,8 @@ function helpers.vils()
 end
 
 function helpers.idle_vils()
-    return helpers.get("idle_vils", function()
+    if tick_cache.idle_vils then return tick_cache.idle_vils end
+    local r = helpers.get("idle_vils", function()
         local p = GetAssignedPlayer()
         local all = p:GetObjectsByClass(UnitClass.VILLAGER)
         local pid = p:GetId()
@@ -67,6 +73,8 @@ function helpers.idle_vils()
         end
         return out
     end, {})
+    tick_cache.idle_vils = r
+    return r
 end
 
 function helpers.scout()
@@ -91,7 +99,10 @@ function helpers.scout()
 end
 
 function helpers.tcs()
-    return helpers.get("tcs", function() return GetAssignedPlayer():GetTownCenters() end, {})
+    if tick_cache.tcs then return tick_cache.tcs end
+    local r = helpers.get("tcs", function() return GetAssignedPlayer():GetTownCenters() end, {})
+    tick_cache.tcs = r
+    return r
 end
 
 function helpers.tc_pos()
@@ -103,13 +114,16 @@ function helpers.tc_pos()
 end
 
 function helpers.pop()
-    return helpers.get("pop", function()
+    if tick_cache.pop then return tick_cache.pop end
+    local r = helpers.get("pop", function()
         local current = GetFact(Fact.POPULATION) or 0
         local vilCount = 0
         if Fact.VILLAGER_COUNT then vilCount = GetFact(Fact.VILLAGER_COUNT) or 0 end
         if vilCount == 0 then vilCount = #helpers.vils() end
         return { current = current, vils = vilCount }
     end, { current = 0, vils = 0 })
+    tick_cache.pop = r
+    return r
 end
 
 function helpers.resources()
@@ -143,7 +157,9 @@ function helpers.can_research(tech_id)
 end
 
 function helpers.buildings(name_pattern)
-    return helpers.get("buildings", function()
+    local key = "buildings:" .. name_pattern
+    if tick_cache[key] then return tick_cache[key] end
+    local r = helpers.get("buildings", function()
         local p = GetAssignedPlayer()
         local all = p:GetPlayerObjects()
         local out = {}
@@ -155,6 +171,8 @@ function helpers.buildings(name_pattern)
         end
         return out
     end, {})
+    tick_cache[key] = r
+    return r
 end
 
 -- ══ Spatial ══
@@ -419,7 +437,7 @@ end
 
 -- ══ Commands ══
 
-local function resolve_type_id(building_key)
+function helpers.resolve_type_id(building_key)
     local typeId = UnitObjectType[building_key]
     if typeId then return typeId end
     local base = string.gsub(building_key, "_DARK_AGE", "")
@@ -442,7 +460,7 @@ function helpers.train_vil()
 end
 
 function helpers.build_at(building_key, target_pos)
-    local typeId = resolve_type_id(building_key)
+    local typeId = helpers.resolve_type_id(building_key)
     if not typeId then
         Log("[helpers] " .. building_key .. " not found")
         return false
@@ -464,7 +482,7 @@ end
 
 function helpers.build_near_tc(building_key)
     if not construction then return false end
-    local typeId = resolve_type_id(building_key)
+    local typeId = helpers.resolve_type_id(building_key)
     if not typeId then
         Log("[helpers] " .. building_key .. " not found")
         return false

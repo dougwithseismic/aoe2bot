@@ -198,9 +198,9 @@ local function build_lumber_camp()
 
     local tc = h.tc_pos()
     local cluster = h.find_tree_cluster(rt, tc)
-    local built = cluster
-        and h.build_at("LUMBER_CAMP_DARK_AGE", cluster)
-        or h.build_near_tc("LUMBER_CAMP_DARK_AGE")
+    local built
+    if cluster then built = h.build_at("LUMBER_CAMP_DARK_AGE", cluster) end
+    if not built then built = h.build_near_tc("LUMBER_CAMP_DARK_AGE") end
     if built then
         state.lc = "ordered"
         state.lc_ordered_at = state.tick
@@ -217,9 +217,9 @@ local function build_mill()
 
     local tc = h.tc_pos()
     local berries = h.find_berry_pos(rt, tc)
-    local built = berries
-        and h.build_at("MILL_DARK_AGE", berries)
-        or h.build_near_tc("MILL_DARK_AGE")
+    local built
+    if berries then built = h.build_at("MILL_DARK_AGE", berries) end
+    if not built then built = h.build_near_tc("MILL_DARK_AGE") end
     if built then
         state.mill = "ordered"
         state.mill_ordered_at = state.tick
@@ -235,9 +235,9 @@ local function build_mining_camp()
 
     local tc = h.tc_pos()
     local gold = h.find_gold_pos(rt, tc)
-    local built = gold
-        and h.build_at("MINING_CAMP_DARK_AGE", gold)
-        or h.build_near_tc("MINING_CAMP_DARK_AGE")
+    local built
+    if gold then built = h.build_at("MINING_CAMP_DARK_AGE", gold) end
+    if not built then built = h.build_near_tc("MINING_CAMP_DARK_AGE") end
     if built then
         state.mc = "ordered"
         state.mc_ordered_at = state.tick
@@ -265,9 +265,12 @@ local function click_feudal()
     if not h.can_afford(500, 0, 0, 0) then return false end
     if not h.can_research(TECH_FEUDAL) then return false end
 
-    local dark_buildings = #h.buildings("LUMBER") + #h.buildings("MILL")
-        + #h.buildings("MINING") + #h.buildings("BARRACKS")
-    if dark_buildings < 2 then return false end
+    local done_count = 0
+    if state.lc == "done" then done_count = done_count + 1 end
+    if state.mill == "done" then done_count = done_count + 1 end
+    if state.mc == "done" then done_count = done_count + 1 end
+    if state.barracks == "done" then done_count = done_count + 1 end
+    if done_count < 2 then return false end
 
     local ok = h.research(TECH_FEUDAL, "Feudal Age")
     if ok then state.feudal_clicked = true end
@@ -314,23 +317,23 @@ end
 local function train_military()
     if h.age() < 1 then return false end
     if #h.buildings("ARCHERY") == 0 then return false end
-    if not h.can_afford(25, 45, 0, 0) and not h.can_afford(25, 35, 0, 0) then return false end
     local r = h.resources()
-    local result
-    if r.gold >= 45 then
-        result = h.get("train_archer", function()
-            local typeId = UnitObjectType["ARCHER_FEUDAL_AGE"] or UnitObjectType["ARCHER"]
+    if r.gold >= 45 and r.wood >= 25 then
+        local result = h.get("train_archer", function()
+            local typeId = h.resolve_type_id("ARCHER_FEUDAL_AGE")
             if not typeId then return false end
             return TrainUnit(typeId)
         end, false)
         if result then event_log.add("train archer"); return true end
     end
-    result = h.get("train_skirm", function()
-        local typeId = UnitObjectType["SKIRMISHER_FEUDAL_AGE"] or UnitObjectType["SKIRMISHER"]
-        if not typeId then return false end
-        return TrainUnit(typeId)
-    end, false)
-    if result then event_log.add("train skirmisher"); return true end
+    if r.food >= 25 and r.wood >= 35 then
+        local result = h.get("train_skirm", function()
+            local typeId = h.resolve_type_id("SKIRMISHER_FEUDAL_AGE")
+            if not typeId then return false end
+            return TrainUnit(typeId)
+        end, false)
+        if result then event_log.add("train skirmisher"); return true end
+    end
     return false
 end
 
@@ -360,11 +363,15 @@ end
 function bo.update(resource_tracker)
     rt = resource_tracker
     state.tick = state.tick + 1
+    h.begin_tick()
 
     local ok, err = pcall(function()
         ensure_scouting()
         if ensure_houses() then return end
-        if ensure_training() then return end
+
+        -- Vil production and military production run side by side
+        ensure_training()
+        train_military()
 
         if not state.food_forced then
             if force_initial_food() then return end
@@ -381,7 +388,6 @@ function bo.update(resource_tracker)
         if click_feudal() then return end
         if feudal_upgrades() then return end
         if build_archery_range() then return end
-        if train_military() then return end
 
         if state.tick % 5 == 0 then herd_livestock() end
     end)
